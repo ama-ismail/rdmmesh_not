@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import bank.rdmmesh.api.port.IdentityPort;
+import bank.rdmmesh.api.security.RdmmeshPrincipal;
 import bank.rdmmesh.identity.internal.jwt.JwtValidator.InvalidJwtException;
 import io.dropwizard.auth.AuthenticationException;
 import io.dropwizard.auth.Authenticator;

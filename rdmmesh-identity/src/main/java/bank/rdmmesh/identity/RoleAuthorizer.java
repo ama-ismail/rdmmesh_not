@@ -2,6 +2,7 @@ package bank.rdmmesh.identity;
 
 import jakarta.ws.rs.container.ContainerRequestContext;
 
+import bank.rdmmesh.api.security.RdmmeshPrincipal;
 import io.dropwizard.auth.Authorizer;
 
 /**

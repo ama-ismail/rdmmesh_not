@@ -8,7 +8,7 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 
-import bank.rdmmesh.identity.RdmmeshPrincipal;
+import bank.rdmmesh.api.security.RdmmeshPrincipal;
 import io.dropwizard.auth.Auth;
 
 /**

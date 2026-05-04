@@ -23,6 +23,11 @@
             <groupId>bank.rdmmesh</groupId>
             <artifactId>rdmmesh-catalog</artifactId>
         </dependency>
+
+        <dependency>
+            <groupId>bank.rdmmesh</groupId>
+            <artifactId>rdmmesh-spec</artifactId>
+        </dependency>
         <dependency>
             <groupId>bank.rdmmesh</groupId>
             <artifactId>rdmmesh-authoring</artifactId>

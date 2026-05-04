@@ -7,12 +7,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import bank.rdmmesh.api.port.IdentityPort;
+import bank.rdmmesh.api.port.OwnershipPort;
+import bank.rdmmesh.api.security.RdmmeshPrincipal;
 import bank.rdmmesh.app.auth.AuthResource;
 import bank.rdmmesh.app.health.InfoHealthCheck;
+import bank.rdmmesh.catalog.CatalogModule;
 import bank.rdmmesh.identity.IdentityModule;
 import bank.rdmmesh.identity.JwtAuthenticator;
-import bank.rdmmesh.identity.RdmmeshPrincipal;
 import bank.rdmmesh.identity.RoleAuthorizer;
+import bank.rdmmesh.ownership.OwnershipModule;
 import io.dropwizard.auth.AuthDynamicFeature;
 import io.dropwizard.auth.AuthValueFactoryProvider;
 import io.dropwizard.auth.oauth.OAuthCredentialAuthFilter;
@@ -65,13 +68,20 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         IdentityPort identityPort = buildIdentityPort(jdbi, config);
         registerJwtAuth(environment, identityPort);
 
+        OwnershipPort ownershipPort = OwnershipModule.buildPort(jdbi);
+
+        CatalogModule.Resources catalog = CatalogModule.build(jdbi, ownershipPort);
+        environment.jersey().register(catalog.domains());
+        environment.jersey().register(catalog.codeSets());
+        environment.jersey().register(catalog.schemas());
+
         environment.jersey().register(new AuthResource());
 
         environment.healthChecks().register("info",
                 new InfoHealthCheck(getName(), getClass().getPackage().getImplementationVersion()));
 
         // TODO: register module resources as bounded contexts get filled in.
-        //  jdbi и identityPort будут передаваться в module-level wiring builders отсюда.
+        //  Authoring (E4), Workflow (E5), Publishing (E6), Distribution (E8), Ownership webhook (E7).
     }
 
     private static IdentityPort buildIdentityPort(Jdbi jdbi, RdmmeshConfiguration config) {

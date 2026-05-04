@@ -64,11 +64,27 @@ public final class ModuleIsolationTest {
                     // rdmmesh-audit gets its first class is mandatory.
                     .allowEmptyShould(true);
 
-    /** No bounded context may reach into another's internal sub-packages. */
+    /**
+     * No bounded context may reach into another's internal sub-packages. Все классы
+     * соседнего модуля доступны только через public API (root-package + любое не-internal
+     * подмножество). Internal импортирует ТОЛЬКО собственный модуль.
+     *
+     * <p>Реализация через slice-rule, чтобы за каждый сторонний модуль писать одно правило,
+     * а не N×N.
+     */
     @ArchTest
     static final ArchRule modules_do_not_import_internals =
             noClasses()
-                    .that().resideInAPackage("bank.rdmmesh.(catalog|authoring|workflow|publishing|distribution|identity|ownership|audit)..")
+                    .that().resideInAPackage("bank.rdmmesh.(catalog|authoring|workflow|publishing|distribution|identity|ownership|audit|app)..")
+                    .and().resideOutsideOfPackages(
+                            "bank.rdmmesh.catalog.internal..",
+                            "bank.rdmmesh.authoring.internal..",
+                            "bank.rdmmesh.workflow.internal..",
+                            "bank.rdmmesh.publishing.internal..",
+                            "bank.rdmmesh.distribution.internal..",
+                            "bank.rdmmesh.identity.internal..",
+                            "bank.rdmmesh.ownership.internal..",
+                            "bank.rdmmesh.audit.internal..")
                     .should().dependOnClassesThat()
                     .resideInAnyPackage(
                             "bank.rdmmesh.catalog.internal..",
@@ -78,7 +94,22 @@ public final class ModuleIsolationTest {
                             "bank.rdmmesh.distribution.internal..",
                             "bank.rdmmesh.identity.internal..",
                             "bank.rdmmesh.ownership.internal..",
-                            "bank.rdmmesh.audit.internal..")
-                    // Same caveat as audit_only_depends_on_api_or_spec.
+                            "bank.rdmmesh.audit.internal..");
+
+    /**
+     * SPEC §3.3: модуль {@code distribution} read-only — никаких UPDATE/INSERT/DELETE.
+     * Проверяется через запрет JDBI write-аннотаций ({@code @SqlUpdate}/{@code @SqlBatch})
+     * — этого достаточно, потому что весь репозиторий ходит в БД через JDBI3 SqlObject.
+     * Правило временно с {@code allowEmptyShould(true)}; снять как только в
+     * {@code rdmmesh-distribution/src/main/java} появится первый класс.
+     */
+    @ArchTest
+    static final ArchRule distribution_does_no_db_writes =
+            noClasses()
+                    .that().resideInAPackage("bank.rdmmesh.distribution..")
+                    .should().dependOnClassesThat()
+                    .haveFullyQualifiedName("org.jdbi.v3.sqlobject.statement.SqlUpdate")
+                    .orShould().dependOnClassesThat()
+                    .haveFullyQualifiedName("org.jdbi.v3.sqlobject.statement.SqlBatch")
                     .allowEmptyShould(true);
 }

@@ -1,4 +1,4 @@
-package bank.rdmmesh.identity;
+package bank.rdmmesh.api.security;
 
 import java.security.Principal;
 import java.util.Set;
@@ -7,12 +7,15 @@ import java.util.UUID;
 import bank.rdmmesh.api.port.IdentityPort.AuthenticatedUser;
 
 /**
- * Adapter {@link AuthenticatedUser} → {@link Principal} для интеграции с Dropwizard-auth /
- * Jersey. {@link IdentityPort#AuthenticatedUser} живёт в {@code rdmmesh-api} и сознательно
- * не зависит от {@link Principal}, чтобы оставаться технологически нейтральным.
+ * Адаптер {@link AuthenticatedUser} → {@link Principal}. Лежит в {@code rdmmesh-api},
+ * чтобы любой bounded context (catalog, authoring, …) мог принимать его через
+ * {@code @Auth RdmmeshPrincipal} в JAX-RS-resource'ах, не импортируя соседние модули
+ * (запрещено ArchUnit'ом, см. {@code ModuleIsolationTest}).
  *
- * <p>Имя principal'а — {@code username} (sAMAccountName). Ролевая семантика — через
- * {@link #hasRole(String)}, что используется в {@code Authorizer<RdmmeshPrincipal>}.
+ * <p>Реализация {@link Principal#getName()} возвращает {@code username} (sAMAccountName)
+ * — это то, что Jersey показывает в access-log'е и Dropwizard передаёт в {@code AuthFilter}.
+ * Asset-level роли (Owner/Steward/Expert per CodeSet) живут в {@code OwnershipPort} и
+ * проверяются отдельной политикой.
  */
 public final class RdmmeshPrincipal implements Principal {
 
