@@ -1,0 +1,198 @@
+{
+  "realm": "bank",
+  "enabled": true,
+  "displayName": "Bank (rdmmesh dev realm)",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "accessTokenLifespan": 900,
+  "accessCodeLifespan": 60,
+  "accessCodeLifespanUserAction": 300,
+  "actionTokenGeneratedByUserLifespan": 300,
+  "actionTokenGeneratedByAdminLifespan": 43200,
+
+  "groups": [
+    { "name": "RDM_ADMIN" },
+    { "name": "RDM_AUTHOR" },
+    { "name": "RDM_STEWARD" },
+    { "name": "RDM_OWNER" },
+    { "name": "RDM_SCHEMA_DESIGNER" },
+    { "name": "RDM_CONSUMER" }
+  ],
+
+  "roles": {
+    "realm": [
+      { "name": "RDM_ADMIN",            "description": "Глобальный администратор rdmmesh (без права обхода workflow)." },
+      { "name": "RDM_AUTHOR",           "description": "Создаёт и редактирует draft-версии справочников в своём домене." },
+      { "name": "RDM_STEWARD",          "description": "Технический ревью draft, approve/reject — per domain." },
+      { "name": "RDM_OWNER",            "description": "Бизнес-approve, инициирует publish — per CodeSet (приходит из OM)." },
+      { "name": "RDM_SCHEMA_DESIGNER",  "description": "Проектирует CodeSetSchema." },
+      { "name": "RDM_CONSUMER",         "description": "Read-only по published-версиям через REST API/UI." }
+    ]
+  },
+
+  "defaultGroups": ["RDM_CONSUMER"],
+
+  "clients": [
+    {
+      "clientId": "rdmmesh-backend",
+      "name": "rdmmesh — backend (service account)",
+      "description": "Confidential client. Issues access tokens with audience `rdmmesh-backend` and is also used by the lazy-lookup bot to call OpenMetadata REST.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "secret": "dev-backend-secret",
+      "attributes": {
+        "access.token.lifespan": "900",
+        "use.refresh.tokens": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-rdmmesh-backend",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "rdmmesh-backend",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "rdmmesh-ui",
+      "name": "rdmmesh — UI (PKCE)",
+      "description": "Public client for the React SPA. PKCE-only, audience `rdmmesh-backend`.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:5173/*",
+        "http://localhost:3000/*"
+      ],
+      "webOrigins": [
+        "http://localhost:5173",
+        "http://localhost:3000"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5173/*##http://localhost:3000/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-rdmmesh-backend",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "rdmmesh-backend",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "preferred_username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "username",
+            "claim.name": "preferred_username",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+
+  "users": [
+    {
+      "username": "dev-admin",
+      "enabled": true,
+      "email": "dev-admin@bank.local",
+      "firstName": "Dev",
+      "lastName": "Admin",
+      "credentials": [
+        { "type": "password", "value": "dev", "temporary": false }
+      ],
+      "groups": ["RDM_ADMIN"]
+    },
+    {
+      "username": "dev-author",
+      "enabled": true,
+      "email": "dev-author@bank.local",
+      "firstName": "Dev",
+      "lastName": "Author",
+      "credentials": [
+        { "type": "password", "value": "dev", "temporary": false }
+      ],
+      "groups": ["RDM_AUTHOR", "RDM_SCHEMA_DESIGNER"]
+    },
+    {
+      "username": "dev-steward",
+      "enabled": true,
+      "email": "dev-steward@bank.local",
+      "firstName": "Dev",
+      "lastName": "Steward",
+      "credentials": [
+        { "type": "password", "value": "dev", "temporary": false }
+      ],
+      "groups": ["RDM_STEWARD"]
+    },
+    {
+      "username": "dev-owner",
+      "enabled": true,
+      "email": "dev-owner@bank.local",
+      "firstName": "Dev",
+      "lastName": "Owner",
+      "credentials": [
+        { "type": "password", "value": "dev", "temporary": false }
+      ],
+      "groups": ["RDM_OWNER"]
+    }
+  ]
+}

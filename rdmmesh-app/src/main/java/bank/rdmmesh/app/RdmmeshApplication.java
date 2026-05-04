@@ -2,17 +2,27 @@ package bank.rdmmesh.app;
 
 import org.flywaydb.core.Flyway;
 import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.sqlobject.SqlObjectPlugin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import bank.rdmmesh.api.port.IdentityPort;
+import bank.rdmmesh.app.auth.AuthResource;
+import bank.rdmmesh.app.health.InfoHealthCheck;
+import bank.rdmmesh.identity.IdentityModule;
+import bank.rdmmesh.identity.JwtAuthenticator;
+import bank.rdmmesh.identity.RdmmeshPrincipal;
+import bank.rdmmesh.identity.RoleAuthorizer;
+import io.dropwizard.auth.AuthDynamicFeature;
+import io.dropwizard.auth.AuthValueFactoryProvider;
+import io.dropwizard.auth.oauth.OAuthCredentialAuthFilter;
 import io.dropwizard.configuration.EnvironmentVariableSubstitutor;
 import io.dropwizard.configuration.SubstitutingSourceProvider;
 import io.dropwizard.core.Application;
 import io.dropwizard.core.setup.Bootstrap;
 import io.dropwizard.core.setup.Environment;
 import io.dropwizard.jdbi3.JdbiFactory;
-
-import bank.rdmmesh.app.health.InfoHealthCheck;
+import org.glassfish.jersey.server.filter.RolesAllowedDynamicFeature;
 
 /**
  * rdmmesh composition root. The only place that knows about all bounded contexts;
@@ -49,13 +59,55 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         }
 
         Jdbi jdbi = new JdbiFactory().build(environment, config.getDatabase(), "rdmmesh");
-        log.info("JDBI initialised against {}", config.getDatabase().getUrl());
+        jdbi.installPlugin(new SqlObjectPlugin());
+        log.info("JDBI initialised against {} (SqlObjectPlugin installed)", config.getDatabase().getUrl());
+
+        IdentityPort identityPort = buildIdentityPort(jdbi, config);
+        registerJwtAuth(environment, identityPort);
+
+        environment.jersey().register(new AuthResource());
 
         environment.healthChecks().register("info",
                 new InfoHealthCheck(getName(), getClass().getPackage().getImplementationVersion()));
 
         // TODO: register module resources as bounded contexts get filled in.
-        // jdbi will be passed into module-level wiring builders here.
+        //  jdbi и identityPort будут передаваться в module-level wiring builders отсюда.
+    }
+
+    private static IdentityPort buildIdentityPort(Jdbi jdbi, RdmmeshConfiguration config) {
+        var kc = config.getKeycloak();
+        var om = config.getOpenmetadata();
+        return IdentityModule.builder()
+                .jdbi(jdbi)
+                .keycloak(new IdentityModule.KeycloakSettings(
+                        kc.getIssuerUri(),
+                        kc.getJwksUri(),
+                        kc.getAudience(),
+                        kc.getUsernameClaim(),
+                        kc.getGroupsClaim(),
+                        kc.getRequiredClaims(),
+                        kc.getJwksCacheTtl(),
+                        kc.getClockSkew()))
+                .openmetadata(new IdentityModule.OpenMetadataSettings(
+                        om.getBaseUrl(),
+                        om.getBotToken(),
+                        om.getConnectTimeout(),
+                        om.getRequestTimeout()))
+                .build();
+    }
+
+    private static void registerJwtAuth(Environment environment, IdentityPort identityPort) {
+        var authenticator = new JwtAuthenticator(identityPort);
+        var filter = new OAuthCredentialAuthFilter.Builder<RdmmeshPrincipal>()
+                .setAuthenticator(authenticator)
+                .setAuthorizer(new RoleAuthorizer())
+                .setPrefix("Bearer")
+                .setRealm("rdmmesh")
+                .buildAuthFilter();
+        environment.jersey().register(new AuthDynamicFeature(filter));
+        environment.jersey().register(new AuthValueFactoryProvider.Binder<>(RdmmeshPrincipal.class));
+        environment.jersey().register(RolesAllowedDynamicFeature.class);
+        log.info("JWT auth filter registered (Bearer + @RolesAllowed enabled)");
     }
 
     private static void runFlyway(RdmmeshConfiguration config) {

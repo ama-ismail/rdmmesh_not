@@ -106,3 +106,22 @@ flyway:
     - classpath:db/migration/identity
     - classpath:db/migration/ownership
     - classpath:db/migration/audit
+
+keycloak:
+  issuerUri:     ${RDM_KC_ISSUER_URI}
+  jwksUri:       ${RDM_KC_JWKS_URI}
+  audience:      ${RDM_KC_AUDIENCE:-rdmmesh-backend}
+  usernameClaim: preferred_username
+  groupsClaim:   groups
+  requiredClaims:
+    - preferred_username
+    - sub
+  jwksCacheTtl:  10 minutes
+  clockSkew:     60 seconds
+
+# В prod OM-интеграция обязательна (без неё нельзя резолвить om_user_id для real-овнеров).
+openmetadata:
+  baseUrl:        ${RDM_OM_BASE_URL}
+  botToken:       ${RDM_OM_BOT_TOKEN}
+  connectTimeout: 2 seconds
+  requestTimeout: 5 seconds

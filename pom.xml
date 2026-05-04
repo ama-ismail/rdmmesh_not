@@ -264,7 +264,11 @@
                         <release>${java.version}</release>
                         <parameters>true</parameters>
                         <compilerArgs>
-                            <arg>-Xlint:all,-serial,-processing</arg>
+                            <!-- -classfile отключён, потому что часть transitive deps
+                                 (например dropwizard-auth) ссылаются на findbugs/spotbugs
+                                 annotations, которых нет в runtime classpath; чистый
+                                 javac warning, не ошибка. -->
+                            <arg>-Xlint:all,-serial,-processing,-classfile</arg>
                             <arg>-Werror</arg>
                         </compilerArgs>
                     </configuration>

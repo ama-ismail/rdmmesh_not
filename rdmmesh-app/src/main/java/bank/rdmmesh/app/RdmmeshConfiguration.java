@@ -9,7 +9,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 
 /**
- * Top-level Dropwizard configuration. Reads database, flyway, and (later) keycloak
+ * Top-level Dropwizard configuration. Reads database, flyway, keycloak, openmetadata
  * blocks from {@code config.yml}; environment substitution is enabled in
  * {@link RdmmeshApplication#initialize}.
  */
@@ -25,12 +25,30 @@ public final class RdmmeshConfiguration extends Configuration {
     @JsonProperty("flyway")
     private FlywayConfig flyway = new FlywayConfig();
 
+    @Valid
+    @NotNull
+    @JsonProperty("keycloak")
+    private KeycloakConfig keycloak = new KeycloakConfig();
+
+    @Valid
+    @NotNull
+    @JsonProperty("openmetadata")
+    private OpenMetadataConfig openmetadata = new OpenMetadataConfig();
+
     public DataSourceFactory getDatabase() {
         return database;
     }
 
     public FlywayConfig getFlyway() {
         return flyway;
+    }
+
+    public KeycloakConfig getKeycloak() {
+        return keycloak;
+    }
+
+    public OpenMetadataConfig getOpenmetadata() {
+        return openmetadata;
     }
 
     /** Flyway-specific knobs that are not in the upstream {@code DataSourceFactory}. */

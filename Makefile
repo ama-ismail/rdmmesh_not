@@ -53,8 +53,24 @@ logs: ## Tail compose logs
 	$(COMPOSE) logs -f --tail=200
 
 .PHONY: psql
-psql: ## Open psql against the dev database
-	$(COMPOSE) exec postgres psql -U rdmmesh -d rdmmesh
+psql: ## Open psql against the dev database (admin role)
+	$(COMPOSE) exec postgres psql -U rdmmesh_admin -d rdmmesh
+
+.PHONY: kc-token
+kc-token: ## Issue a dev access token (KC_USER=dev-author KC_PASS=dev → JWT). Requires `make up` first.
+	@curl -s -X POST "http://localhost:8090/realms/bank/protocol/openid-connect/token" \
+	    -d "grant_type=password" \
+	    -d "client_id=rdmmesh-ui" \
+	    -d "username=$${KC_USER:-dev-author}" \
+	    -d "password=$${KC_PASS:-dev}" \
+	    -d "scope=openid" | (jq -r .access_token 2>/dev/null || cat)
+
+.PHONY: kc-admin
+kc-admin: ## Open Keycloak admin console URL (login admin/admin)
+	@echo "Keycloak admin: http://localhost:8090/admin (admin/admin)"
+	@echo "Realm:          http://localhost:8090/realms/bank"
+	@echo "Token endpoint: http://localhost:8090/realms/bank/protocol/openid-connect/token"
+	@echo "JWKS:           http://localhost:8090/realms/bank/protocol/openid-connect/certs"
 
 .PHONY: ui
 ui: ## Run the React dev server

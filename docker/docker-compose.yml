@@ -3,9 +3,11 @@
 # Start: docker compose -f docker/docker-compose.yml up -d
 # Drop:  docker compose -f docker/docker-compose.yml down -v
 #
-# Adds Keycloak in a future iteration once rdmmesh-identity is wired (E2). For
-# now the service runs without authentication and rdmmesh-app's Flyway runs
-# automatically on first boot.
+# Stack:
+#   * postgres        — общий OLTP-store для catalog/authoring/.../audit schemas (Flyway).
+#   * keycloak        — OIDC issuer для realm `bank`, общий с OpenMetadata в проде.
+#                       В dev — start-dev с h2 in-memory, realm импортируется при boot.
+#   * rdmmesh-service — Dropwizard backend (Flyway autoMigrate, JWT через Keycloak).
 
 name: rdmmesh
 
@@ -29,6 +31,29 @@ services:
       retries: 12
     restart: unless-stopped
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: rdmmesh-keycloak
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-admin}
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      # При импорте — overwrite, чтобы изменения realm-bank.json подхватывались на boot.
+      KC_LOG_LEVEL: INFO
+    volumes:
+      - ./keycloak/realms:/opt/keycloak/data/import:ro
+    ports:
+      - "${KC_HTTP_PORT:-8090}:8080"
+    # Образ Keycloak (ubi9-micro) не содержит curl/wget, а наш ранее использовавшийся
+    # `exec 3<>/dev/tcp` HEAD-запрос капризен на Keycloak >25 (HTTP/1.1 chunked). Не делаем
+    # healthcheck — сервис JWKS-кэш греет лениво при первом JWT, а realm-импорт
+    # завершается за ~10 секунд (видно по `make logs`). Если для CI понадобится gating —
+    # ввести отдельный wait-job через `wait-for-it.sh`.
+    restart: unless-stopped
+
   rdmmesh-service:
     build:
       context: ..
@@ -37,6 +62,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      keycloak:
+        condition: service_started
     environment:
       RDM_DB_URL: jdbc:postgresql://postgres:5432/${RDM_DB_NAME:-rdmmesh}
       RDM_DB_USER: rdmmesh_app
@@ -44,6 +71,17 @@ services:
       RDM_HTTP_PORT: 8080
       RDM_ADMIN_PORT: 8081
       RDM_FLYWAY_AUTO: "true"
+      # OIDC: iss в токенах = http://localhost:8090/realms/bank (Keycloak ставит его по
+      # Host-хедеру запроса, а пользовательские flows идут через localhost:8090). JWKS
+      # загружается изнутри docker network через alias `keycloak` — это разные URL'ы
+      # для разных целей: один валидируется как claim, другой используется для HTTP.
+      RDM_KC_ISSUER_URI: ${RDM_KC_ISSUER_URI:-http://localhost:8090/realms/bank}
+      RDM_KC_JWKS_URI:   ${RDM_KC_JWKS_URI:-http://keycloak:8080/realms/bank/protocol/openid-connect/certs}
+      RDM_KC_AUDIENCE:   ${RDM_KC_AUDIENCE:-rdmmesh-backend}
+      # OM REST для lazy lookup om_user_id (см. SPEC §2.4). В dev OM нет — оставлено пустым,
+      # IdentityPort должен корректно деградировать (см. handoff §6 E2).
+      RDM_OM_BASE_URL:   ${RDM_OM_BASE_URL:-}
+      RDM_OM_BOT_TOKEN:  ${RDM_OM_BOT_TOKEN:-}
     ports:
       - "${RDM_HTTP_PORT:-8080}:8080"
       - "${RDM_ADMIN_PORT:-8081}:8081"

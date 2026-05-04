@@ -63,3 +63,24 @@ flyway:
     - classpath:db/migration/identity
     - classpath:db/migration/ownership
     - classpath:db/migration/audit
+
+keycloak:
+  issuerUri:     ${RDM_KC_ISSUER_URI:-http://localhost:8090/realms/bank}
+  jwksUri:       ${RDM_KC_JWKS_URI:-http://keycloak:8080/realms/bank/protocol/openid-connect/certs}
+  audience:      ${RDM_KC_AUDIENCE:-rdmmesh-backend}
+  usernameClaim: preferred_username
+  groupsClaim:   groups
+  requiredClaims:
+    - preferred_username
+    - sub
+  jwksCacheTtl:  10 minutes
+  clockSkew:     60 seconds
+
+# OpenMetadata: используется только для lazy lookup om_user_id (SPEC §2.4).
+# В dev-стенде без OM поля можно оставить пустыми — IdentityPort деградирует мягко
+# (provisional mapping + warning в логе), не блокируя аутентификацию.
+openmetadata:
+  baseUrl:        ${RDM_OM_BASE_URL:-}
+  botToken:       ${RDM_OM_BOT_TOKEN:-}
+  connectTimeout: 2 seconds
+  requestTimeout: 5 seconds
