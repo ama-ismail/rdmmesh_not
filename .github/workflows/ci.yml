@@ -1,0 +1,99 @@
+# rdmmesh — CI.
+#
+# Pipeline (см. handoff E1 §3.7):
+#   * pull_request → validate (быстрый smoke: pom-структура, codegen, compile)
+#   * push в main / release/* → verify (unit + IT, ArchUnit) + docker buildx (multi-stage Dockerfile)
+#
+# Skip-list для документ-only PR'ов: SPEC.md / docs/** не запускают тяжёлый verify-job.
+
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "release/*"]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  MAVEN_CLI_OPTS: "-B -ntp --no-transfer-progress"
+
+jobs:
+  validate:
+    name: validate (pom + codegen + compile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: mvn validate (enforcer + dependencyConvergence)
+        run: mvn $MAVEN_CLI_OPTS validate
+
+      - name: mvn -DskipTests compile (codegen + javac)
+        run: mvn $MAVEN_CLI_OPTS -DskipTests compile
+
+  verify:
+    name: verify (unit + IT + ArchUnit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: validate
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: mvn verify (skip integration-tests on first iteration)
+        # IT'ы появятся в эпиках E2+ через testcontainers; пока verify ≈ unit + ArchUnit.
+        run: mvn $MAVEN_CLI_OPTS -DskipITs verify
+
+      - name: Upload surefire reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: |
+            **/target/surefire-reports/**
+            **/target/failsafe-reports/**
+          retention-days: 7
+
+  docker:
+    name: docker buildx (multi-stage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: validate
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push, cache-only)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          load: false
+          tags: rdmmesh-service:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

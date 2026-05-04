@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/events/ownership-changed-event.json",
+  "title": "OwnershipChangedEvent",
+  "description": "Inbound payload accepted by POST /webhooks/om/ownership. Mirrors the relevant slice of an OpenMetadata ChangeEvent — only enough for RDM to upsert rdm_asset_ownership. See SPEC §2.4.",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.events.OwnershipChangedEvent",
+  "required": ["event_id", "entity_type", "fully_qualified_name", "occurred_at", "owners"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "OM ChangeEvent.id (used for idempotency in rdm_asset_ownership.source_event_id)."
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": ["table", "domain"]
+    },
+    "entity_id": { "$ref": "../common/types.json#/definitions/uuid" },
+    "fully_qualified_name": {
+      "type": "string",
+      "description": "OM FQN — for tables this is 'rdmmesh.<domain>.<codeset>'."
+    },
+    "owners": {
+      "type": "array",
+      "items": { "$ref": "../common/types.json#/definitions/om_user_id" }
+    },
+    "experts": {
+      "type": "array",
+      "items": { "$ref": "../common/types.json#/definitions/om_user_id" }
+    },
+    "reviewers": {
+      "type": "array",
+      "items": { "$ref": "../common/types.json#/definitions/om_user_id" }
+    },
+    "occurred_at": { "$ref": "../common/types.json#/definitions/instant" }
+  },
+  "additionalProperties": false
+}

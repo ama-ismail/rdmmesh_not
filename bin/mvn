@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Run Maven inside the official Eclipse Temurin 21 image so that contributors
+# don't need a local JDK/Maven install. Mounts the repo and a host-side cache
+# for ~/.m2 so dependency downloads survive across runs.
+#
+# Usage:
+#   bin/mvn clean verify
+#   bin/mvn -pl rdmmesh-spec -am compile
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MAVEN_IMAGE="${MAVEN_IMAGE:-maven:3.9-eclipse-temurin-21}"
+M2_CACHE="${M2_CACHE:-${HOME}/.m2-rdmmesh}"
+CONTAINER_HOME="/tmp/rdmmesh-home"
+
+mkdir -p "${M2_CACHE}"
+
+exec docker run --rm \
+    -u "$(id -u):$(id -g)" \
+    -v "${REPO_ROOT}:/workspace" \
+    -v "${M2_CACHE}:${CONTAINER_HOME}/.m2" \
+    -w /workspace \
+    -e HOME="${CONTAINER_HOME}" \
+    -e MAVEN_CONFIG="${CONTAINER_HOME}/.m2" \
+    -e MAVEN_OPTS="${MAVEN_OPTS:--Xmx1g}" \
+    "${MAVEN_IMAGE}" \
+    mvn "$@"

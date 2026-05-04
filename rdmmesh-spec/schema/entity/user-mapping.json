@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/entity/user-mapping.json",
+  "title": "UserMapping",
+  "description": "Bidirectional mapping between OM User.id and Keycloak 'sub'. Populated lazily on first login (lookup in OM API by username). See SPEC §2.4.",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.entity.UserMapping",
+  "required": ["om_user_id", "keycloak_sub", "username"],
+  "properties": {
+    "om_user_id": { "$ref": "../common/types.json#/definitions/om_user_id" },
+    "keycloak_sub": { "$ref": "../common/types.json#/definitions/uuid" },
+    "username": { "$ref": "../common/types.json#/definitions/username" },
+    "email": { "type": "string", "format": "email" },
+    "display_name": { "type": "string" },
+    "first_seen_at": { "$ref": "../common/types.json#/definitions/instant" },
+    "last_seen_at": { "$ref": "../common/types.json#/definitions/instant" }
+  },
+  "additionalProperties": false
+}

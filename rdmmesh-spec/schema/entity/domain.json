@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/entity/domain.json",
+  "title": "Domain",
+  "description": "Business domain mirrored from OpenMetadata. Identity flows from OM; rdmmesh stores a thin local row keyed by om_domain_id so that ownership and CodeSets can attach to it without round-tripping to OM.",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.entity.Domain",
+  "required": ["id", "name", "om_domain_id"],
+  "properties": {
+    "id": { "$ref": "../common/types.json#/definitions/uuid" },
+    "om_domain_id": { "$ref": "../common/types.json#/definitions/om_domain_id" },
+    "name": { "$ref": "../common/types.json#/definitions/qualified_name" },
+    "display_name": { "type": "string", "maxLength": 256 },
+    "description": { "type": "string" },
+    "labels": { "$ref": "../common/types.json#/definitions/localized_label" },
+    "tags": {
+      "type": "array",
+      "items": { "$ref": "../common/types.json#/definitions/tag" }
+    },
+    "created_at": { "$ref": "../common/types.json#/definitions/instant" },
+    "updated_at": { "$ref": "../common/types.json#/definitions/instant" }
+  },
+  "additionalProperties": false
+}

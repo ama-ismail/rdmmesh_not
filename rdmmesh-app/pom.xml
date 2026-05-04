@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>bank.rdmmesh</groupId>
+        <artifactId>rdmmesh-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>rdmmesh-app</artifactId>
+    <name>rdmmesh — app (Dropwizard composition root)</name>
+    <description>
+        Dropwizard Application that wires every bounded context together. This is the
+        only module allowed to know about all sibling modules. Produces a fat jar via
+        maven-shade-plugin.
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>bank.rdmmesh</groupId>
+            <artifactId>rdmmesh-catalog</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>bank.rdmmesh</groupId>
+            <artifactId>rdmmesh-authoring</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>bank.rdmmesh</groupId>
+            <artifactId>rdmmesh-workflow</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>bank.rdmmesh</groupId>
+            <artifactId>rdmmesh-publishing</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>bank.rdmmesh</groupId>
+            <artifactId>rdmmesh-distribution</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>bank.rdmmesh</groupId>
+            <artifactId>rdmmesh-identity</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>bank.rdmmesh</groupId>
+            <artifactId>rdmmesh-ownership</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>bank.rdmmesh</groupId>
+            <artifactId>rdmmesh-audit</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.dropwizard</groupId>
+            <artifactId>dropwizard-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.dropwizard</groupId>
+            <artifactId>dropwizard-jdbi3</artifactId>
+        </dependency>
+
+        <!--
+          JSON-структурированное логирование. Активируется только при выборе соответствующего
+          layout/appender в config'е (см. config-prod.yml). dev config.yml остаётся в plain text.
+        -->
+        <dependency>
+            <groupId>io.dropwizard</groupId>
+            <artifactId>dropwizard-json-logging</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+        </dependency>
+
+        <!-- ArchUnit lives here so isolation tests can scan the entire classpath at once -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>rdmmesh-service</finalName>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- Flyway migrations live in bootstrap/sql/migrations/ as the single source of
+                 truth so the docker-compose dev DB and the JVM service share the same files.
+                 Each module subdir is copied under classpath:db/migration/<module>/. -->
+            <resource>
+                <directory>${project.basedir}/../bootstrap/sql/migrations</directory>
+                <targetPath>db/migration</targetPath>
+                <includes>
+                    <include>**/*.sql</include>
+                </includes>
+            </resource>
+        </resources>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>true</createDependencyReducedPom>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>bank.rdmmesh.app.RdmmeshApplication</mainClass>
+                                </transformer>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                        <exclude>module-info.class</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

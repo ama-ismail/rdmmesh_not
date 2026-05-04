@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/entity/code-set-version.json",
+  "title": "CodeSetVersion",
+  "description": "One revision of a CodeSet — DRAFT while editing, immutable snapshot once PUBLISHED. Stores the bitemporal envelope, signature, and approver trail. See SPEC §3.4 + §3.8.",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.entity.CodeSetVersion",
+  "required": [
+    "id",
+    "codeset_id",
+    "version",
+    "status",
+    "schema_version"
+  ],
+  "properties": {
+    "id": { "$ref": "../common/types.json#/definitions/uuid" },
+    "codeset_id": { "$ref": "../common/types.json#/definitions/uuid" },
+    "version": { "$ref": "../common/types.json#/definitions/semver" },
+    "status": { "$ref": "../common/enums.json#/definitions/version_status" },
+    "schema_version": { "type": "integer", "minimum": 1 },
+
+    "effective_from": { "$ref": "../common/types.json#/definitions/business_date" },
+    "effective_to": {
+      "$ref": "../common/types.json#/definitions/business_date",
+      "description": "NULL means 'open-ended'. Filled when the next version supersedes this one."
+    },
+    "system_from": { "$ref": "../common/types.json#/definitions/instant" },
+    "system_to": { "$ref": "../common/types.json#/definitions/instant" },
+
+    "created_at": { "$ref": "../common/types.json#/definitions/instant" },
+    "created_by": { "$ref": "../common/types.json#/definitions/om_user_id" },
+    "reviewed_by": {
+      "type": "array",
+      "items": { "$ref": "../common/types.json#/definitions/om_user_id" },
+      "description": "Stewards that have approved this version (1+ in MVP)."
+    },
+    "approved_by": { "$ref": "../common/types.json#/definitions/om_user_id" },
+    "published_by": { "$ref": "../common/types.json#/definitions/om_user_id" },
+    "published_at": { "$ref": "../common/types.json#/definitions/instant" },
+    "deprecated_at": { "$ref": "../common/types.json#/definitions/instant" },
+
+    "content_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 over deterministic JSON serialisation of all CodeItems in this version."
+    },
+    "approval_signature": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "HMAC_SHA256(content_hash || approved_by || timestamp, server_secret)."
+    },
+    "owner_was_provisional": {
+      "type": "boolean",
+      "default": false,
+      "description": "True when the publish happened before OM ingestion + ownership webhook had assigned a real owner. See SPEC §2.4 bootstrap."
+    },
+
+    "release_channel": { "$ref": "../common/enums.json#/definitions/release_channel" },
+    "item_count": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

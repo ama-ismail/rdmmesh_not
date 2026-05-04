@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/api/bulk-import-result.json",
+  "title": "BulkImportResult",
+  "description": "Result of POST /versions/{id}/items/bulk. Reports per-row outcomes; on validation failure the whole batch is rejected (atomic per-version semantics).",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.api.BulkImportResult",
+  "required": ["status", "rows_total"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["APPLIED", "REJECTED"]
+    },
+    "rows_total": { "type": "integer", "minimum": 0 },
+    "rows_added": { "type": "integer", "minimum": 0 },
+    "rows_updated": { "type": "integer", "minimum": 0 },
+    "rows_unchanged": { "type": "integer", "minimum": 0 },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "BulkImportError",
+        "required": ["row_index", "message"],
+        "properties": {
+          "row_index": { "type": "integer", "minimum": 0 },
+          "key_parts": {
+            "type": "array",
+            "items": { "$ref": "../common/types.json#/definitions/key_part" }
+          },
+          "field": { "type": "string" },
+          "message": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

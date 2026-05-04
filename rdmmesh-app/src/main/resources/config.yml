@@ -1,0 +1,65 @@
+# rdmmesh — default development configuration.
+# Override per-environment via environment variable substitution (initialize()
+# wires SubstitutingSourceProvider with EnvironmentVariableSubstitutor).
+
+server:
+  applicationConnectors:
+    - type: http
+      port: ${RDM_HTTP_PORT:-8080}
+  adminConnectors:
+    - type: http
+      port: ${RDM_ADMIN_PORT:-8081}
+  rootPath: /api/v1/*
+  requestLog:
+    appenders:
+      - type: console
+        timeZone: UTC
+
+logging:
+  level: INFO
+  loggers:
+    bank.rdmmesh: DEBUG
+    org.flywaydb: INFO
+    org.jdbi: INFO
+  appenders:
+    - type: console
+      timeZone: UTC
+      logFormat: "%d{ISO8601,UTC} %-5p [%t] %c{0} - %m%n"
+
+database:
+  driverClass: org.postgresql.Driver
+  url: ${RDM_DB_URL:-jdbc:postgresql://postgres:5432/rdmmesh}
+  user: ${RDM_DB_USER:-rdmmesh_app}
+  password: ${RDM_DB_PASSWORD:-rdmmesh_dev}
+  maxWaitForConnection: 5s
+  validationQuery: "/* rdmmesh health */ SELECT 1"
+  validationQueryTimeout: 3s
+  initialSize: 2
+  minSize: 2
+  maxSize: 10
+  checkConnectionWhileIdle: true
+  evictionInterval: 30s
+  minIdleTime: 1 minute
+  properties:
+    charSet: UTF-8
+
+flyway:
+  autoMigrate: ${RDM_FLYWAY_AUTO:-true}
+  defaultSchema: rdmmesh_meta
+  schemas:
+    - catalog
+    - authoring
+    - workflow
+    - publishing
+    - identity
+    - ownership
+    - audit
+  locations:
+    - classpath:db/migration/_init
+    - classpath:db/migration/catalog
+    - classpath:db/migration/authoring
+    - classpath:db/migration/workflow
+    - classpath:db/migration/publishing
+    - classpath:db/migration/identity
+    - classpath:db/migration/ownership
+    - classpath:db/migration/audit

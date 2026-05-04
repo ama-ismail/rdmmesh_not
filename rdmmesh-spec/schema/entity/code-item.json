@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/entity/code-item.json",
+  "title": "CodeItem",
+  "description": "One row of a CodeSet for a particular version. Composite key is encoded as 'key_parts' (an array aligned to CodeSet.key_spec.parts). See SPEC §3.4 ADR-007.",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.entity.CodeItem",
+  "required": [
+    "id",
+    "version_id",
+    "key_parts",
+    "label",
+    "status"
+  ],
+  "properties": {
+    "id": { "$ref": "../common/types.json#/definitions/uuid" },
+    "version_id": { "$ref": "../common/types.json#/definitions/uuid" },
+
+    "key_parts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "../common/types.json#/definitions/key_part" },
+      "description": "Aligned positionally with CodeSet.key_spec.parts. ['KZ'] for single-keyed; ['RETAIL','BB','12M'] for IFRS9 PD matrix."
+    },
+
+    "label": { "$ref": "../common/types.json#/definitions/localized_label" },
+    "description": { "$ref": "../common/types.json#/definitions/localized_label" },
+
+    "parent_key": {
+      "type": "array",
+      "items": { "$ref": "../common/types.json#/definitions/key_part" },
+      "description": "Intra-codeset hierarchy parent. NULL for roots."
+    },
+    "parent_ref": {
+      "type": "object",
+      "title": "ParentRef",
+      "description": "Cross-codeset hierarchy reference (e.g., City → Country).",
+      "required": ["codeset_id", "key_parts"],
+      "properties": {
+        "codeset_id": { "$ref": "../common/types.json#/definitions/uuid" },
+        "key_parts": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "../common/types.json#/definitions/key_part" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "attributes": {
+      "type": "object",
+      "description": "Free-form map validated at write time against the active CodeSetSchema.json_schema.",
+      "additionalProperties": true
+    },
+
+    "order_index": { "type": "integer", "minimum": 0 },
+    "status": { "$ref": "../common/enums.json#/definitions/code_item_status" },
+
+    "effective_from": { "$ref": "../common/types.json#/definitions/business_date" },
+    "effective_to": { "$ref": "../common/types.json#/definitions/business_date" },
+    "system_from": { "$ref": "../common/types.json#/definitions/instant" },
+    "system_to": { "$ref": "../common/types.json#/definitions/instant" },
+
+    "row_version": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optimistic locking counter, incremented on every UPDATE within a DRAFT version."
+    }
+  },
+  "additionalProperties": false
+}

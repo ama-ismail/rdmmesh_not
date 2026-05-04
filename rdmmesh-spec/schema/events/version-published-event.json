@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/events/version-published-event.json",
+  "title": "VersionPublishedEvent",
+  "description": "Emitted by publishing module when a CodeSetVersion reaches PUBLISHED. Body of outbound webhooks. The receiver verifies HMAC-SHA256(body, secret) against X-RDM-Signature.",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.events.VersionPublishedEvent",
+  "required": [
+    "event_id",
+    "schema_version",
+    "codeset_id",
+    "domain_id",
+    "version",
+    "version_id",
+    "content_hash",
+    "approval_signature",
+    "published_at"
+  ],
+  "properties": {
+    "event_id": { "$ref": "../common/types.json#/definitions/uuid" },
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Schema version of *this* event payload, not of the CodeSet."
+    },
+    "domain_id": { "$ref": "../common/types.json#/definitions/uuid" },
+    "domain_name": { "$ref": "../common/types.json#/definitions/qualified_name" },
+    "codeset_id": { "$ref": "../common/types.json#/definitions/uuid" },
+    "codeset_name": { "$ref": "../common/types.json#/definitions/qualified_name" },
+    "version_id": { "$ref": "../common/types.json#/definitions/uuid" },
+    "version": { "$ref": "../common/types.json#/definitions/semver" },
+    "previous_version": { "$ref": "../common/types.json#/definitions/semver" },
+    "release_channel": { "$ref": "../common/enums.json#/definitions/release_channel" },
+    "effective_from": { "$ref": "../common/types.json#/definitions/business_date" },
+    "effective_to": { "$ref": "../common/types.json#/definitions/business_date" },
+    "content_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "approval_signature": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "published_at": { "$ref": "../common/types.json#/definitions/instant" },
+    "published_by": { "$ref": "../common/types.json#/definitions/om_user_id" },
+    "item_count": { "type": "integer", "minimum": 0 },
+    "items_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Absolute URL the consumer can hit to fetch the snapshot (REST endpoint). Required for idempotent retries."
+    }
+  },
+  "additionalProperties": false
+}

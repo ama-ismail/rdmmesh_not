@@ -1,0 +1,108 @@
+# rdmmesh — production-leaning configuration profile.
+#
+# Отличия от dev config.yml:
+#   * structured JSON логи (для Loki/ELK/CloudWatch и т.п.) через dropwizard-json-logging;
+#   * Flyway autoMigrate выключен — миграции запускаются отдельным шагом (CI / Helm pre-install
+#     hook). См. README §Production-Strategy для Flyway.
+#   * минимальные размеры пулов соединений, настраиваемые env-vars'ами.
+#
+# Запуск: java -jar app.jar server config-prod.yml
+# Все остальные параметры подменяются env-vars (initialize() уже подключает
+# EnvironmentVariableSubstitutor).
+
+server:
+  applicationConnectors:
+    - type: http
+      port: ${RDM_HTTP_PORT:-8080}
+  adminConnectors:
+    - type: http
+      port: ${RDM_ADMIN_PORT:-8081}
+  rootPath: /api/v1/*
+  requestLog:
+    appenders:
+      - type: console
+        timeZone: UTC
+        layout:
+          type: access-json
+          timestampFormat: "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+          includes:
+            - timestamp
+            - remoteAddress
+            - remoteUser
+            - protocol
+            - method
+            - requestUri
+            - statusCode
+            - requestTime
+            - contentLength
+            - userAgent
+
+logging:
+  level: ${RDM_LOG_LEVEL:-INFO}
+  loggers:
+    bank.rdmmesh: ${RDM_APP_LOG_LEVEL:-INFO}
+    org.flywaydb: INFO
+    org.jdbi: WARN
+  appenders:
+    - type: console
+      timeZone: UTC
+      layout:
+        type: json
+        timestampFormat: "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        prettyPrint: false
+        appendLineSeparator: true
+        includes:
+          - timestamp
+          - level
+          - threadName
+          - mdc
+          - loggerName
+          - message
+          - exception
+        # Свободные kv-поля для tagging'а в агрегаторе логов
+        customFieldNames:
+          timestamp: "@timestamp"
+          message: "msg"
+        additionalFields:
+          service: rdmmesh
+          env: ${RDM_ENV:-prod}
+
+database:
+  driverClass: org.postgresql.Driver
+  url: ${RDM_DB_URL}
+  user: ${RDM_DB_USER}
+  password: ${RDM_DB_PASSWORD}
+  maxWaitForConnection: 5s
+  validationQuery: "/* rdmmesh health */ SELECT 1"
+  validationQueryTimeout: 3s
+  initialSize: ${RDM_DB_POOL_INITIAL:-4}
+  minSize: ${RDM_DB_POOL_MIN:-4}
+  maxSize: ${RDM_DB_POOL_MAX:-32}
+  checkConnectionWhileIdle: true
+  evictionInterval: 30s
+  minIdleTime: 1 minute
+  properties:
+    charSet: UTF-8
+
+flyway:
+  # В prod миграции — отдельный шаг (CI / Helm hook), сервис стартует с уже мигрированной БД.
+  # Если нужно сменить дефолт — подайте RDM_FLYWAY_AUTO=true.
+  autoMigrate: ${RDM_FLYWAY_AUTO:-false}
+  defaultSchema: rdmmesh_meta
+  schemas:
+    - catalog
+    - authoring
+    - workflow
+    - publishing
+    - identity
+    - ownership
+    - audit
+  locations:
+    - classpath:db/migration/_init
+    - classpath:db/migration/catalog
+    - classpath:db/migration/authoring
+    - classpath:db/migration/workflow
+    - classpath:db/migration/publishing
+    - classpath:db/migration/identity
+    - classpath:db/migration/ownership
+    - classpath:db/migration/audit

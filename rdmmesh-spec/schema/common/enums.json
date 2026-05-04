@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/common/enums.json",
+  "title": "Enums",
+  "description": "Cross-cutting enumerations shared by entity / API / event schemas.",
+  "definitions": {
+    "version_status": {
+      "type": "string",
+      "title": "VersionStatus",
+      "enum": [
+        "DRAFT",
+        "IN_REVIEW",
+        "STEWARD_APPROVED",
+        "OWNER_APPROVED",
+        "PUBLISHED",
+        "DEPRECATED",
+        "REJECTED"
+      ],
+      "description": "Lifecycle states of a CodeSetVersion. See SPEC §2.2 etap 3 for the transition diagram."
+    },
+    "code_item_status": {
+      "type": "string",
+      "title": "CodeItemStatus",
+      "enum": ["ACTIVE", "RETIRED"]
+    },
+    "hierarchy_mode": {
+      "type": "string",
+      "title": "HierarchyMode",
+      "enum": ["NONE", "INTRA_CODESET", "CROSS_CODESET"],
+      "description": "NONE: flat. INTRA_CODESET: parent_key inside same CodeSet. CROSS_CODESET: parent_ref points to another CodeSet."
+    },
+    "release_channel": {
+      "type": "string",
+      "title": "ReleaseChannel",
+      "enum": ["PROD", "SANDBOX"]
+    },
+    "asset_role": {
+      "type": "string",
+      "title": "AssetRole",
+      "enum": ["OWNER", "STEWARD", "EXPERT", "APPROVER"],
+      "description": "Roles attached to a specific asset (CodeSet or Domain). Distinct from base functional roles which come from Keycloak/AD groups."
+    },
+    "asset_type": {
+      "type": "string",
+      "title": "AssetType",
+      "enum": ["DOMAIN", "CODESET"]
+    },
+    "key_part_type": {
+      "type": "string",
+      "title": "KeyPartType",
+      "enum": ["STRING", "INTEGER", "DECIMAL", "DATE", "ENUM"]
+    },
+    "transition_action": {
+      "type": "string",
+      "title": "TransitionAction",
+      "enum": [
+        "submit",
+        "steward_approve",
+        "steward_reject",
+        "owner_approve",
+        "owner_reject",
+        "publish",
+        "deprecate"
+      ]
+    }
+  }
+}

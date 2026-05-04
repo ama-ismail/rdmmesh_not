@@ -1,0 +1,54 @@
+# rdmmesh — local development stack.
+#
+# Start: docker compose -f docker/docker-compose.yml up -d
+# Drop:  docker compose -f docker/docker-compose.yml down -v
+#
+# Adds Keycloak in a future iteration once rdmmesh-identity is wired (E2). For
+# now the service runs without authentication and rdmmesh-app's Flyway runs
+# automatically on first boot.
+
+name: rdmmesh
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: rdmmesh-postgres
+    environment:
+      POSTGRES_USER: ${RDM_DB_ADMIN_USER:-rdmmesh_admin}
+      POSTGRES_PASSWORD: ${RDM_DB_ADMIN_PASSWORD:-rdmmesh_admin_dev}
+      POSTGRES_DB: ${RDM_DB_NAME:-rdmmesh}
+    volumes:
+      - rdmmesh-postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${RDM_DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  rdmmesh-service:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: rdmmesh-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RDM_DB_URL: jdbc:postgresql://postgres:5432/${RDM_DB_NAME:-rdmmesh}
+      RDM_DB_USER: rdmmesh_app
+      RDM_DB_PASSWORD: ${RDM_DB_APP_PASSWORD:-rdmmesh_dev}
+      RDM_HTTP_PORT: 8080
+      RDM_ADMIN_PORT: 8081
+      RDM_FLYWAY_AUTO: "true"
+    ports:
+      - "${RDM_HTTP_PORT:-8080}:8080"
+      - "${RDM_ADMIN_PORT:-8081}:8081"
+    restart: unless-stopped
+
+volumes:
+  rdmmesh-postgres-data:
+    name: rdmmesh-postgres-data

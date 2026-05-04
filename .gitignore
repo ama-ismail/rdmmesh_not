@@ -1,0 +1,52 @@
+# Maven
+target/
+**/target/
+*.versionsBackup
+dependency-reduced-pom.xml
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+.cache/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Generated sources (codegen JSON Schema -> Java/TS)
+**/generated-sources/
+**/generated-test-sources/
+rdmmesh-ui/src/types/generated/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+docker/.env
+helm/values-*.local.yaml
+
+# JVM crash logs
+hs_err_pid*.log
+replay_pid*.log

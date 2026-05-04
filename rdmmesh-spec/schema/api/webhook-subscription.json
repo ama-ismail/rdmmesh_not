@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/api/webhook-subscription.json",
+  "title": "WebhookSubscription",
+  "description": "Outbound webhook subscription registered by a consumer (Risk-engine, IGA, …). RDM signs each delivery with HMAC-SHA256 over secret. See SPEC §3.5.",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.api.WebhookSubscription",
+  "required": ["id", "url", "secret_id"],
+  "properties": {
+    "id": { "$ref": "../common/types.json#/definitions/uuid" },
+    "url": { "type": "string", "format": "uri" },
+    "secret_id": {
+      "type": "string",
+      "description": "Vault/SOPS key id holding the HMAC secret (the secret itself is never returned by the API)."
+    },
+    "filter": {
+      "type": "object",
+      "title": "SubscriptionFilter",
+      "description": "Restricts which events trigger the delivery.",
+      "properties": {
+        "domains": {
+          "type": "array",
+          "items": { "$ref": "../common/types.json#/definitions/qualified_name" }
+        },
+        "codesets": {
+          "type": "array",
+          "items": { "$ref": "../common/types.json#/definitions/qualified_name" }
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["VERSION_PUBLISHED", "VERSION_DEPRECATED"]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "active": { "type": "boolean", "default": true },
+    "created_at": { "$ref": "../common/types.json#/definitions/instant" },
+    "created_by": { "$ref": "../common/types.json#/definitions/om_user_id" },
+    "last_delivery_at": { "$ref": "../common/types.json#/definitions/instant" },
+    "last_delivery_status": {
+      "type": "string",
+      "enum": ["OK", "FAILED", "RETRYING"]
+    }
+  },
+  "additionalProperties": false
+}

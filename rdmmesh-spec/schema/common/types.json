@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/common/types.json",
+  "title": "Types",
+  "description": "Common scalar types and shared structures used across rdmmesh entities. Not generated as a class by itself — each definition is referenced from other schemas via $ref.",
+  "definitions": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "javaType": "java.util.UUID"
+    },
+    "om_user_id": {
+      "type": "string",
+      "format": "uuid",
+      "javaType": "java.util.UUID",
+      "description": "OpenMetadata User.id (UUID). The single source of truth for user identity. RDM stores it directly; AD/Keycloak ids are mapped via rdm_user_mapping."
+    },
+    "om_domain_id": {
+      "type": "string",
+      "format": "uuid",
+      "javaType": "java.util.UUID",
+      "description": "OpenMetadata Domain.id (UUID). RDM mirrors domains from OM; the local Domain row references this id."
+    },
+    "username": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "AD sAMAccountName / Keycloak preferred_username."
+    },
+    "iso_language": {
+      "type": "string",
+      "enum": ["ru", "en"],
+      "description": "Supported UI / label languages in the MVP."
+    },
+    "localized_label": {
+      "type": "object",
+      "title": "LocalizedLabel",
+      "description": "ru/en label pair. The 'en' fallback is used by the UI when the requested language is missing.",
+      "properties": {
+        "ru": { "type": "string" },
+        "en": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-(?:[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$",
+      "description": "Semantic version (e.g., '1.2.0' or '1.2.0-draft')."
+    },
+    "qualified_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[a-z][a-z0-9_]{0,63}$",
+      "description": "Lower snake_case identifier; used for domain/codeset names that participate in the OM FQN 'rdmmesh.<domain>.<codeset>'."
+    },
+    "tag": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "key_part": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Single component of a CodeItem composite key. Always serialised as string for schema-agnostic indexing; numeric keys are stored as their canonical decimal representation."
+    },
+    "instant": {
+      "type": "string",
+      "format": "date-time",
+      "javaType": "java.time.OffsetDateTime",
+      "description": "ISO-8601 timestamp with offset (UTC by convention)."
+    },
+    "business_date": {
+      "type": "string",
+      "format": "date",
+      "javaType": "java.time.LocalDate",
+      "description": "Calendar date (no time, no zone). Used for effective_from / effective_to."
+    },
+    "page_info": {
+      "type": "object",
+      "title": "PageInfo",
+      "description": "Pagination envelope for collection responses.",
+      "required": ["page", "size", "total"],
+      "properties": {
+        "page": { "type": "integer", "minimum": 0 },
+        "size": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "total": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

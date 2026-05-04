@@ -1,0 +1,16 @@
+* text=auto eol=lf
+
+*.java       text diff=java
+*.xml        text
+*.yaml       text
+*.yml        text
+*.json       text
+*.md         text
+*.sql        text
+
+# Maven Wrapper jar — binary
+.mvn/wrapper/maven-wrapper.jar binary
+
+# Lockfiles — disable diff to avoid noisy reviews
+package-lock.json -diff
+pnpm-lock.yaml    -diff

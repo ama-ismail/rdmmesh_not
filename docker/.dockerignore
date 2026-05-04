@@ -1,0 +1,15 @@
+**/target/
+**/node_modules/
+**/.git/
+**/.idea/
+**/*.iml
+**/.vscode/
+**/dist/
+**/.cache/
+**/.m2/
+**/.m2-rdmmesh/
+**/logs/
+**/.env
+**/.env.*
+docker/.env
+helm/values-*.local.yaml

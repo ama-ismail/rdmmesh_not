@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/entity/asset-ownership.json",
+  "title": "AssetOwnership",
+  "description": "One assignment of an OM user to a role on an asset (Domain or CodeSet). Populated by the OM ownership webhook (SPEC §2.4) and during bootstrap as provisional.",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.entity.AssetOwnership",
+  "required": ["asset_id", "asset_type", "om_user_id", "role"],
+  "properties": {
+    "asset_id": { "$ref": "../common/types.json#/definitions/uuid" },
+    "asset_type": { "$ref": "../common/enums.json#/definitions/asset_type" },
+    "om_user_id": { "$ref": "../common/types.json#/definitions/om_user_id" },
+    "role": { "$ref": "../common/enums.json#/definitions/asset_role" },
+    "is_provisional": {
+      "type": "boolean",
+      "default": false,
+      "description": "True when the assignment was made by RDM during bootstrap (CodeSet creator → OWNER) before OM confirmed."
+    },
+    "assigned_at": { "$ref": "../common/types.json#/definitions/instant" },
+    "assigned_by": { "$ref": "../common/types.json#/definitions/om_user_id" },
+    "source_event_id": {
+      "type": "string",
+      "description": "OM ChangeEvent id, when the assignment came from a webhook. Used for idempotency."
+    }
+  },
+  "additionalProperties": false
+}

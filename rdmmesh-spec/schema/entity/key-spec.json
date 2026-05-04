@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/entity/key-spec.json",
+  "title": "KeySpec",
+  "description": "Describes the composite key of a CodeSet. A single-key CodeSet is just a 1-element parts array. Universal model — see SPEC §3.4 ADR-007.",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.entity.KeySpec",
+  "required": ["parts"],
+  "properties": {
+    "parts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "title": "KeyPart",
+        "required": ["name", "type"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "description": "Stable machine name (e.g., 'segment', 'rating', 'horizon')."
+          },
+          "label": { "$ref": "../common/types.json#/definitions/localized_label" },
+          "type": { "$ref": "../common/enums.json#/definitions/key_part_type" },
+          "allowed_values": {
+            "type": "array",
+            "description": "Closed set of permitted values for ENUM-typed parts.",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

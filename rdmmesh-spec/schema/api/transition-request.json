@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/api/transition-request.json",
+  "title": "TransitionRequest",
+  "description": "Payload of POST /versions/{id}/transitions. Specifies the target state and an optional reviewer comment (mandatory on rejects).",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.api.TransitionRequest",
+  "required": ["to"],
+  "properties": {
+    "to": { "$ref": "../common/enums.json#/definitions/version_status" },
+    "comment": {
+      "type": "string",
+      "maxLength": 4000,
+      "description": "Required when transitioning into a *_REJECTED-style state."
+    },
+    "expected_status": {
+      "$ref": "../common/enums.json#/definitions/version_status",
+      "description": "Optional optimistic-locking guard; the server rejects if the current status does not match."
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/api/error-response.json",
+  "title": "ProblemDetails",
+  "description": "RFC 7807 problem details. Used by every JSON-API endpoint for non-2xx responses.",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.api.ProblemDetails",
+  "required": ["status", "title"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "format": "uri",
+      "default": "about:blank"
+    },
+    "title": { "type": "string" },
+    "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+    "detail": { "type": "string" },
+    "instance": { "type": "string", "format": "uri" },
+    "code": {
+      "type": "string",
+      "description": "Stable machine-readable error code (e.g., 'workflow.invalid_transition')."
+    },
+    "errors": {
+      "type": "array",
+      "description": "Field-level violations for validation errors.",
+      "items": {
+        "type": "object",
+        "title": "FieldError",
+        "required": ["field", "message"],
+        "properties": {
+          "field": { "type": "string" },
+          "message": { "type": "string" },
+          "rejected_value": {}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}

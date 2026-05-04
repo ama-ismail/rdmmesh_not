@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://rdmmesh.bank/schema/api/version-diff.json",
+  "title": "VersionDiff",
+  "description": "Output of GET /versions/{id}/diff?from={ver}. Each entry describes a single CodeItem change between the two versions.",
+  "type": "object",
+  "javaType": "bank.rdmmesh.spec.api.VersionDiff",
+  "required": ["from_version", "to_version", "entries"],
+  "properties": {
+    "from_version": { "$ref": "../common/types.json#/definitions/semver" },
+    "to_version": { "$ref": "../common/types.json#/definitions/semver" },
+    "summary": {
+      "type": "object",
+      "title": "DiffSummary",
+      "properties": {
+        "added": { "type": "integer", "minimum": 0 },
+        "changed": { "type": "integer", "minimum": 0 },
+        "removed": { "type": "integer", "minimum": 0 },
+        "moved": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "DiffEntry",
+        "required": ["op", "key_parts"],
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": ["ADDED", "CHANGED", "REMOVED", "MOVED"]
+          },
+          "key_parts": {
+            "type": "array",
+            "items": { "$ref": "../common/types.json#/definitions/key_part" }
+          },
+          "changed_fields": {
+            "type": "array",
+            "description": "JSON paths inside CodeItem that differ (e.g., 'attributes.pd', 'label.ru').",
+            "items": { "type": "string" }
+          },
+          "before": {},
+          "after": {}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
