@@ -35,6 +35,9 @@ from metadata.generated.schema.api.data.createTable import CreateTableRequest
 from metadata.generated.schema.entity.data.database import Database
 from metadata.generated.schema.entity.data.databaseSchema import DatabaseSchema
 from metadata.generated.schema.entity.data.table import Column, Table, TableType
+from metadata.generated.schema.entity.services.connections.database.customDatabaseConnection import (
+    CustomDatabaseConnection,
+)
 from metadata.generated.schema.entity.services.connections.metadata.openMetadataConnection import (
     OpenMetadataConnection,
 )
@@ -91,7 +94,9 @@ class RdmmeshSource(DatabaseServiceSource):
         self.source_config: DatabaseServiceMetadataPipeline = (
             self.config.sourceConfig.config  # type: ignore[assignment]
         )
-        self.service_connection = self.config.serviceConnection.root.config  # type: ignore[union-attr]
+        self.service_connection: CustomDatabaseConnection = (
+            self.config.serviceConnection.root.config  # type: ignore[union-attr,assignment]
+        )
         self.client: RdmmeshClient = get_connection(self.service_connection)
 
         # Кэши «текущего цикла ingestion'а» — заполняются по мере спуска по топологии.
@@ -112,12 +117,12 @@ class RdmmeshSource(DatabaseServiceSource):
     ) -> RdmmeshSource:
         config = WorkflowSource.model_validate(config_dict)
         connection = config.serviceConnection.root.config  # type: ignore[union-attr]
-        # Sanity: проверяем имя типа подключения. RdmmeshConnection нужен в generated;
-        # если его ещё нет (Pydantic не пересобран в openmetadata-spec) — config упадёт раньше.
-        type_value = getattr(getattr(connection, "type", None), "value", None)
-        if type_value != "Rdmmesh":
+        # vanilla-OM подход: используем generic CustomDatabaseConnection +
+        # sourcePythonClass-discovery. Никаких правок в openmetadata-spec.
+        if not isinstance(connection, CustomDatabaseConnection):
             raise InvalidSourceException(
-                f"Expected RdmmeshConnection, but got type={type_value!r}"
+                "RdmmeshSource ожидает type=CustomDatabase, получили "
+                f"{type(connection).__name__}"
             )
         return cls(config, metadata)  # type: ignore[arg-type]
 

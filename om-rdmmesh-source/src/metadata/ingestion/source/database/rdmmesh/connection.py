@@ -1,23 +1,33 @@
 """
-Connection-handler для rdmmesh source.
+Connection-handler для rdmmesh source (vanilla-OM подход).
 
-Идёт через `get_connection(...)` (создание/кэш клиента) и `test_connection(...)`
-(шаги для test-connection automation feature в OM).
+Используем стандартный OM `CustomDatabaseConnection` + `connectionOptions`
+(Map<String,String>) — никаких правок в `openmetadata-spec`.
+
+Все наши настройки приходят строками через `connectionOptions.root`:
+- hostPort                : URL rdmmesh REST (обязательное)
+- keycloakIssuerUri       : Keycloak realm issuer URI (обязательное)
+- clientId                : OIDC client_id (по умолчанию: rdmmesh-backend)
+- clientSecret            : OIDC client_secret (обязательное)
+- requestTimeoutSeconds   : опционально, "30"
+- verifySSL               : опционально, "true"/"false"
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
 from metadata.ingestion.source.database.rdmmesh.client import RdmmeshApiError, RdmmeshClient
 
 if TYPE_CHECKING:  # pragma: no cover
-    # При установке в OM-venv эти импорты резолвятся. Локально (без OM) —
-    # коннектор не запустится, но импорт TYPE_CHECKING не мешает unit-тестам.
     from metadata.generated.schema.entity.automations.workflow import (
         Workflow as AutomationWorkflow,
+    )
+    from metadata.generated.schema.entity.services.connections.database.customDatabaseConnection import (
+        CustomDatabaseConnection,
     )
     from metadata.generated.schema.entity.services.connections.testConnectionResult import (
         TestConnectionResult,
@@ -30,27 +40,54 @@ _THREE_MIN = 180
 _CLIENT_CACHE: dict[str, RdmmeshClient] = {}
 
 
-def _config_to_dict(connection: Any) -> dict[str, Any]:
-    """Pydantic-config OM → plain dict (имена-поля и SecretStr → str)."""
-    if hasattr(connection, "model_dump"):
-        return connection.model_dump(mode="python")  # pydantic v2
-    if hasattr(connection, "dict"):
-        return connection.dict()  # pydantic v1, на всякий случай
-    return dict(connection)  # type: ignore[arg-type]
+def _options(connection: Any) -> dict[str, str]:
+    """Извлечь `connectionOptions.root` как обычный dict[str, str]."""
+    opts = getattr(connection, "connectionOptions", None)
+    if opts is None:
+        return {}
+    # Pydantic v2 RootModel: .root — это нижележащий dict.
+    root = getattr(opts, "root", None)
+    if isinstance(root, dict):
+        return {str(k): str(v) for k, v in root.items()}
+    # Fallback на случай прямого dict (например, в unit-тестах).
+    if isinstance(opts, dict):
+        return {str(k): str(v) for k, v in opts.items()}
+    return {}
+
+
+def _require(opts: dict[str, str], key: str) -> str:
+    value = opts.get(key)
+    if not value:
+        raise ValueError(
+            f"connectionOptions.{key} не задан — обязательное поле для RdmmeshSource"
+        )
+    return value
+
+
+def _parse_bool(raw: str | None, default: bool) -> bool:
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("true", "1", "yes", "on")
+
+
+def _parse_int(raw: str | None, default: int | None) -> int | None:
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"connectionOptions: ожидался int, получили {raw!r}") from exc
 
 
 def _make_client(connection: Any) -> RdmmeshClient:
-    cfg = _config_to_dict(connection)
-    client_secret = cfg.get("clientSecret")
-    if hasattr(client_secret, "get_secret_value"):
-        client_secret = client_secret.get_secret_value()
+    opts = _options(connection)
     return RdmmeshClient(
-        host_port=cfg["hostPort"],
-        keycloak_issuer_uri=cfg["keycloakIssuerUri"],
-        client_id=cfg["clientId"],
-        client_secret=client_secret or "",
-        request_timeout_seconds=cfg.get("requestTimeoutSeconds"),
-        verify_ssl=cfg.get("verifySSL", True),
+        host_port=_require(opts, "hostPort"),
+        keycloak_issuer_uri=_require(opts, "keycloakIssuerUri"),
+        client_id=opts.get("clientId") or "rdmmesh-backend",
+        client_secret=_require(opts, "clientSecret"),
+        request_timeout_seconds=_parse_int(opts.get("requestTimeoutSeconds"), None),
+        verify_ssl=_parse_bool(opts.get("verifySSL"), True),
     )
 
 
@@ -58,10 +95,12 @@ def get_connection(connection: Any) -> RdmmeshClient:
     """
     Создать / отдать кэшированный клиент.
 
-    Кэш по SHA-256 от сериализованного config'а — OM создаёт новый Pydantic-объект
-    на каждой десериализации, поэтому id() ненадёжен (см. паттерн burstiq).
+    Кэш по SHA-256 от сериализованного `connectionOptions` — OM создаёт новый
+    Pydantic-объект на каждой десериализации, поэтому `id()` ненадёжен
+    (см. паттерн burstiq).
     """
-    payload = repr(_config_to_dict(connection)).encode()
+    opts = _options(connection)
+    payload = json.dumps(opts, sort_keys=True).encode()
     key = hashlib.sha256(payload).hexdigest()
     if key not in _CLIENT_CACHE:
         _CLIENT_CACHE[key] = _make_client(connection)
@@ -71,12 +110,11 @@ def get_connection(connection: Any) -> RdmmeshClient:
 def test_connection(
     metadata: OpenMetadata,
     client: RdmmeshClient,
-    service_connection: Any,
+    service_connection: CustomDatabaseConnection,
     automation_workflow: AutomationWorkflow | None = None,
     timeout_seconds: int | None = _THREE_MIN,
 ) -> TestConnectionResult:
     """Шаги test-connection: auth → list_domains → list_codesets."""
-    # late import — нужен только когда метод реально вызывается из OM
     from metadata.ingestion.connections.test_connections import (
         test_connection_steps,  # type: ignore[import-not-found]
     )
@@ -109,7 +147,7 @@ def test_connection(
     return test_connection_steps(
         metadata=metadata,
         test_fn=test_fn,
-        service_type=getattr(getattr(service_connection, "type", None), "value", "Rdmmesh"),
+        service_type="CustomDatabase",
         automation_workflow=automation_workflow,
         timeout_seconds=timeout_seconds,
     )
