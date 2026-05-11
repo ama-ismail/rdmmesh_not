@@ -28,9 +28,20 @@
             <artifactId>dropwizard-jersey</artifactId>
         </dependency>
 
+        <!-- @Auth RdmmeshPrincipal на consumer-эндпоинтах (SPEC §3.5: JWT обязателен). -->
+        <dependency>
+            <groupId>io.dropwizard</groupId>
+            <artifactId>dropwizard-auth</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.jdbi</groupId>
             <artifactId>jdbi3-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.jdbi</groupId>
+            <artifactId>jdbi3-sqlobject</artifactId>
         </dependency>
 
         <dependency>

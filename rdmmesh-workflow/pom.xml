@@ -24,9 +24,20 @@
             <artifactId>dropwizard-jersey</artifactId>
         </dependency>
 
+        <!-- @Auth + @RolesAllowed на ресурсах транзиций / my-tasks. -->
+        <dependency>
+            <groupId>io.dropwizard</groupId>
+            <artifactId>dropwizard-auth</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.jdbi</groupId>
             <artifactId>jdbi3-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.jdbi</groupId>
+            <artifactId>jdbi3-sqlobject</artifactId>
         </dependency>
 
         <dependency>

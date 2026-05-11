@@ -31,12 +31,26 @@
 
         <dependency>
             <groupId>org.jdbi</groupId>
+            <artifactId>jdbi3-sqlobject</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.jdbi</groupId>
             <artifactId>jdbi3-postgres</artifactId>
         </dependency>
 
         <dependency>
             <groupId>org.jdbi</groupId>
             <artifactId>jdbi3-jackson2</artifactId>
+        </dependency>
+
+        <!-- E11.2d: REST endpoint для admin audit-viewer'а (handoff E10 §3 #3).
+             dropwizard-auth тянет jakarta-annotation (@RolesAllowed) и Jersey
+             auth-binding. ArchUnit-rule audit_only_depends_on_api_or_spec
+             разрешает io.dropwizard..* (см. ModuleIsolationTest). -->
+        <dependency>
+            <groupId>io.dropwizard</groupId>
+            <artifactId>dropwizard-auth</artifactId>
         </dependency>
     </dependencies>
 </project>

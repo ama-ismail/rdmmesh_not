@@ -77,6 +77,12 @@
             <artifactId>jdbi3-sqlobject</artifactId>
         </dependency>
 
+        <!-- PostgresPlugin (UUID[] / hstore / json) — регистрируется в RdmmeshApplication. -->
+        <dependency>
+            <groupId>org.jdbi</groupId>
+            <artifactId>jdbi3-postgres</artifactId>
+        </dependency>
+
         <!--
           JSON-структурированное логирование. Активируется только при выборе соответствующего
           layout/appender в config'е (см. config-prod.yml). dev config.yml остаётся в plain text.
