@@ -16,6 +16,11 @@ export function AppLayout() {
   const { baseRoles } = useAuth();
 
   const isAdmin = baseRoles.includes("RDM_ADMIN");
+  // E14 round 3: RDM_AUDITOR — read-only compliance-роль. Видит "Audit log",
+  // не видит "Subscriptions" (admin-only management). Любой admin одновременно
+  // считается и audit-eligible: ему «Audit log» тоже доступен.
+  const isAuditor = baseRoles.includes("RDM_AUDITOR");
+  const canViewAdmin = isAdmin || isAuditor;
 
   const selected = pathname.startsWith("/admin/subscriptions")
     ? "subscriptions"
@@ -38,7 +43,20 @@ export function AppLayout() {
         label: <Link to="/tasks">{t("nav.tasks")}</Link>,
       },
     ];
-    if (!isAdmin) return main;
+    if (!canViewAdmin) return main;
+    const adminChildren: NonNullable<MenuProps["items"]> = [];
+    if (isAdmin) {
+      adminChildren.push({
+        key: "subscriptions",
+        icon: <ApiOutlined />,
+        label: <Link to="/admin/subscriptions">{t("nav.subscriptions")}</Link>,
+      });
+    }
+    adminChildren.push({
+      key: "audit",
+      icon: <FileSearchOutlined />,
+      label: <Link to="/admin/audit">{t("nav.audit")}</Link>,
+    });
     return [
       ...main,
       { type: "divider" as const },
@@ -46,21 +64,10 @@ export function AppLayout() {
         key: "admin-group",
         type: "group" as const,
         label: t("nav.admin"),
-        children: [
-          {
-            key: "subscriptions",
-            icon: <ApiOutlined />,
-            label: <Link to="/admin/subscriptions">{t("nav.subscriptions")}</Link>,
-          },
-          {
-            key: "audit",
-            icon: <FileSearchOutlined />,
-            label: <Link to="/admin/audit">{t("nav.audit")}</Link>,
-          },
-        ],
+        children: adminChildren,
       },
     ];
-  }, [t, isAdmin]);
+  }, [t, isAdmin, canViewAdmin]);
 
   return (
     <Layout style={{ minHeight: "100vh" }}>

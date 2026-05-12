@@ -171,4 +171,65 @@ public interface AuditLogDao {
             UUID actor,
             @ColumnName("occurred_at") OffsetDateTime occurredAt,
             String payload) {}
+
+    /**
+     * E14 round 4 — стриминговый export. Те же фильтры что и {@link #findPaged},
+     * но с двумя дополнениями:
+     * <ul>
+     *   <li>{@code id <= :snapshotMaxId} — снимок журнала на момент старта
+     *       export'а; concurrent INSERT'ы в audit_log поверх snapshot'а не
+     *       попадают в выгрузку, что устраняет дубликаты на границах страниц.</li>
+     *   <li>ORDER BY {@code id ASC} — стабильный порядок по PK; index scan по
+     *       BIGSERIAL даёт O(1) seek для каждой следующей страницы.</li>
+     * </ul>
+     * <p>Возвращает {@link ExportRow} — расширенный AuditEntry с
+     * {@code payload_canonical} (нужен compliance-аудитору для пересчёта
+     * hash-chain независимо от backend'а).
+     */
+    @SqlQuery("""
+            SELECT id, event_id, event_type, aggregate_type, aggregate_id, actor,
+                   occurred_at, payload::text AS payload, payload_canonical,
+                   prev_hash, entry_hash
+              FROM audit.audit_log
+             WHERE id <= :snapshotMaxId
+               AND (:eventType     IS NULL OR event_type     = :eventType)
+               AND (:aggregateType IS NULL OR aggregate_type = :aggregateType)
+               AND (:aggregateId   IS NULL OR aggregate_id   = :aggregateId)
+               AND (:actor         IS NULL OR actor          = :actor)
+               AND (:fromTs        IS NULL OR occurred_at   >= :fromTs)
+               AND (:toTs          IS NULL OR occurred_at   <  :toTs)
+               AND (:freeText      IS NULL OR payload->>'comment' ILIKE :freeText)
+             ORDER BY id ASC
+             LIMIT :limit OFFSET :offset
+            """)
+    @RegisterConstructorMapper(ExportRow.class)
+    List<ExportRow> findExportPage(
+            @Bind("snapshotMaxId") long snapshotMaxId,
+            @Bind("eventType") String eventType,
+            @Bind("aggregateType") String aggregateType,
+            @Bind("aggregateId") UUID aggregateId,
+            @Bind("actor") UUID actor,
+            @Bind("fromTs") OffsetDateTime fromTs,
+            @Bind("toTs") OffsetDateTime toTs,
+            @Bind("freeText") String freeTextLikePattern,
+            @Bind("limit") int limit,
+            @Bind("offset") long offset);
+
+    /**
+     * Read-row для audit-export endpoint'а. Включает hash-chain поля и
+     * canonical payload — compliance-аудитор должен иметь полный набор
+     * для независимого verify-цепочки оффлайн.
+     */
+    record ExportRow(
+            long id,
+            @ColumnName("event_id") UUID eventId,
+            @ColumnName("event_type") String eventType,
+            @ColumnName("aggregate_type") String aggregateType,
+            @ColumnName("aggregate_id") UUID aggregateId,
+            UUID actor,
+            @ColumnName("occurred_at") OffsetDateTime occurredAt,
+            String payload,
+            @ColumnName("payload_canonical") String payloadCanonical,
+            @ColumnName("prev_hash") String prevHash,
+            @ColumnName("entry_hash") String entryHash) {}
 }

@@ -3,6 +3,8 @@ package bank.rdmmesh.api.port;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.jdbi.v3.core.Handle;
+
 /**
  * Sync-контракт catalog'а для ownership-webhook'а (SPEC §2.4): mirror domain'ов из OM и
  * lookup CodeSet'а по FQN, который OM присылает в ChangeEvent для table.
@@ -18,6 +20,13 @@ public interface CatalogMirrorPort {
      * mutable-поля; deleted_at сбрасывается (resurrect — тоже валидный путь, см. SPEC §2.4).
      */
     DomainMirrorResult upsertDomainFromOm(DomainMirror mirror);
+
+    /**
+     * E14 round 5.2 — Handle-overload. OwnershipWebhookService использует его,
+     * чтобы UPSERT mirror'а и INSERT в processed_om_event попали в одну Postgres tx.
+     * Закрывает split-tx между расхождением journal'а и mirror'а при сбое.
+     */
+    DomainMirrorResult upsertDomainFromOm(Handle handle, DomainMirror mirror);
 
     /**
      * Soft-delete по {@code om_domain_id} — проставляет {@code deleted_at = now()}. Реальное

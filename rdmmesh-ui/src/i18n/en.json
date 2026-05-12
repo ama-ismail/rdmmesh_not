@@ -235,7 +235,7 @@
     "totalRows": "Total rows: {{total}}",
     "payload": "Payload",
     "notAdminTitle": "Access denied",
-    "notAdminDescription": "Audit log access is restricted to users with the RDM_ADMIN role.",
+    "notAdminDescription": "Audit log access is restricted to users with the RDM_ADMIN or RDM_AUDITOR role.",
     "col": {
       "occurredAt": "Time",
       "eventType": "Event type",
@@ -254,6 +254,31 @@
       "q": "Free-text on comment",
       "qHint": "ILIKE %…% search on payload->>'comment' field (case-insensitive).",
       "qPlaceholder": "e.g. \"rollback for test\""
+    },
+    "export": {
+      "button": "Download",
+      "tooltip": "Downloads the audit journal with applied filters as a file. CSV for Excel/spreadsheets, NDJSON for jq and stream parsing. Available to RDM_ADMIN or RDM_AUDITOR.",
+      "csv": "CSV (for Excel)",
+      "ndjson": "NDJSON (for jq)",
+      "success": "Export ready ({{format}})",
+      "error": "Export failed — {{status}}: {{message}}"
+    },
+    "verify": {
+      "button": "Verify integrity",
+      "tooltip": "Recomputes the SHA-256 hash-chain of the audit journal and matches it against the stored values. Available to RDM_ADMIN.",
+      "title": "Audit chain integrity check",
+      "running": "Verifying chain…",
+      "rerun": "Run again",
+      "close": "Close",
+      "okTitle": "Chain intact",
+      "okSubtitle": "Verified {{checked}} entries (#{{from}} … #{{to}}). prev_hash and entry_hash match for every entry in the range.",
+      "brokenTitle": "Chain broken",
+      "brokenSubtitle": "First break — entry #{{firstBrokenAt}}. This means the entry has been modified after being recorded, or the chain was not restored after PITR. Contact compliance.",
+      "rangeLabel": "Range",
+      "checkedShort": "checked: {{checked}}",
+      "reasonLabel": "Break reason",
+      "expectedHash": "Expected hash",
+      "storedHash": "Stored hash"
     }
   },
   "history": {

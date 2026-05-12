@@ -5,17 +5,29 @@ import {
   Card,
   Col,
   DatePicker,
+  Descriptions,
+  Dropdown,
   Form,
   Input,
+  Modal,
+  Result,
   Row,
   Select,
   Space,
+  Spin,
   Table,
   Tag,
   Typography,
+  message,
+  type MenuProps,
   type TableColumnsType,
 } from "antd";
-import { ClearOutlined, SearchOutlined } from "@ant-design/icons";
+import {
+  ClearOutlined,
+  DownloadOutlined,
+  SafetyCertificateOutlined,
+  SearchOutlined,
+} from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
@@ -24,7 +36,7 @@ import { api, type AuditQuery } from "@/api/endpoints";
 import { qk } from "@/api/queryClient";
 import { ApiError } from "@/api/client";
 import { useAuth } from "@/auth/AuthContext";
-import type { AuditEntry } from "@/api/types";
+import type { AuditChainVerifyResult, AuditEntry } from "@/api/types";
 
 // Известные event_type'ы — из AuditEventClassifier (E10 §1.4). Backend может слать
 // и неизвестные ("simpleClassName" fallback) — Select допускает any string через
@@ -56,12 +68,39 @@ interface FormValues {
 export function AuditPage() {
   const { t } = useTranslation();
   const { baseRoles } = useAuth();
-  const isAdmin = baseRoles.includes("RDM_ADMIN");
+  // E14 round 3: read-only доступ для RDM_AUDITOR (compliance team). Listing и
+  // verify-chain доступны обоим; admin-actions (subscriptions, closure rebuild)
+  // живут на других страницах под отдельным guard'ом.
+  const canViewAudit =
+      baseRoles.includes("RDM_ADMIN") || baseRoles.includes("RDM_AUDITOR");
 
   const [form] = Form.useForm<FormValues>();
   const [page, setPage] = useState(0);
   const [size, setSize] = useState(50);
   const [filters, setFilters] = useState<AuditQuery>({});
+  const [verifyOpen, setVerifyOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const exportMenu: MenuProps = {
+    items: [
+      { key: "csv", label: t("audit.export.csv") },
+      { key: "ndjson", label: t("audit.export.ndjson") },
+    ],
+    onClick: async ({ key }) => {
+      const format = key as "csv" | "ndjson";
+      setExporting(true);
+      try {
+        await api.downloadAuditExport(filters, format);
+        message.success(t("audit.export.success", { format: format.toUpperCase() }));
+      } catch (e) {
+        const status = e instanceof ApiError ? e.status : 0;
+        const msg = e instanceof ApiError ? e.message : String(e);
+        message.error(t("audit.export.error", { status, message: msg }));
+      } finally {
+        setExporting(false);
+      }
+    },
+  };
 
   const q = useQuery({
     queryKey: qk.audit.list(page, size, {
@@ -74,10 +113,10 @@ export function AuditPage() {
       q: filters.q ?? null,
     }),
     queryFn: () => api.listAuditEntries(page, size, filters),
-    enabled: isAdmin,
+    enabled: canViewAudit,
   });
 
-  if (!isAdmin) {
+  if (!canViewAudit) {
     return (
       <Alert
         type="warning"
@@ -172,7 +211,30 @@ export function AuditPage() {
   ];
 
   return (
-    <Card title={t("audit.title")}>
+    <Card
+      title={t("audit.title")}
+      extra={
+        <Space>
+          <Dropdown menu={exportMenu} trigger={["click"]} disabled={exporting}>
+            <Button
+              icon={<DownloadOutlined />}
+              loading={exporting}
+              title={t("audit.export.tooltip")}
+            >
+              {t("audit.export.button")}
+            </Button>
+          </Dropdown>
+          <Button
+            icon={<SafetyCertificateOutlined />}
+            onClick={() => setVerifyOpen(true)}
+            title={t("audit.verify.tooltip")}
+          >
+            {t("audit.verify.button")}
+          </Button>
+        </Space>
+      }
+    >
+      <VerifyChainModal open={verifyOpen} onClose={() => setVerifyOpen(false)} />
       <Card type="inner" size="small" style={{ marginBottom: 16 }} title={t("audit.filters")}>
         <Form form={form} layout="vertical">
           <Row gutter={12}>
@@ -291,4 +353,116 @@ function trim(s: string | null | undefined): string | null {
   if (!s) return null;
   const t = s.trim();
   return t || null;
+}
+
+// E14 round 1 — UI обёртка вокруг GET /audit/verify-chain. Modal открывается
+// кнопкой «Проверить целостность цепочки» в Card.extra AuditPage. Запрос
+// инициируется при `open=true` и переиспользует cache (staleTime 0 — каждое
+// открытие = свежий запрос; ad-hoc admin-action, не feed).
+function VerifyChainModal(p: { open: boolean; onClose: () => void }) {
+  const { t } = useTranslation();
+  const verify = useQuery({
+    queryKey: qk.audit.verify(null, null),
+    queryFn: () => api.verifyAuditChain(),
+    enabled: p.open,
+    staleTime: 0,
+    gcTime: 0,
+  });
+
+  return (
+    <Modal
+      open={p.open}
+      onCancel={p.onClose}
+      title={t("audit.verify.title")}
+      width={640}
+      footer={
+        <Space>
+          {!verify.isFetching && (
+            <Button onClick={() => verify.refetch()}>{t("audit.verify.rerun")}</Button>
+          )}
+          <Button type="primary" onClick={p.onClose}>
+            {t("audit.verify.close")}
+          </Button>
+        </Space>
+      }
+    >
+      {verify.isFetching && (
+        <div style={{ textAlign: "center", padding: 32 }}>
+          <Spin />
+          <div style={{ marginTop: 12 }}>{t("audit.verify.running")}</div>
+        </div>
+      )}
+
+      {!verify.isFetching && verify.error && (
+        <Alert
+          type="error"
+          showIcon
+          message={
+            verify.error instanceof ApiError
+              ? `${verify.error.status}: ${verify.error.message}`
+              : String(verify.error)
+          }
+        />
+      )}
+
+      {!verify.isFetching && verify.data && <VerifyChainResultView result={verify.data} />}
+    </Modal>
+  );
+}
+
+function VerifyChainResultView({ result }: { result: AuditChainVerifyResult }) {
+  const { t } = useTranslation();
+
+  if (result.verified) {
+    return (
+      <Result
+        status="success"
+        title={t("audit.verify.okTitle")}
+        subTitle={t("audit.verify.okSubtitle", {
+          checked: result.checked,
+          from: result.from,
+          to: result.to,
+        })}
+      />
+    );
+  }
+
+  return (
+    <>
+      <Result
+        status="error"
+        title={t("audit.verify.brokenTitle")}
+        subTitle={t("audit.verify.brokenSubtitle", {
+          firstBrokenAt: result.first_broken_at,
+        })}
+      />
+      <Descriptions size="small" bordered column={1} style={{ marginTop: 12 }}>
+        <Descriptions.Item label={t("audit.verify.rangeLabel")}>
+          <code>
+            #{result.from} … #{result.to}
+          </code>{" "}
+          ({t("audit.verify.checkedShort", { checked: result.checked })})
+        </Descriptions.Item>
+        {result.reason && (
+          <Descriptions.Item label={t("audit.verify.reasonLabel")}>
+            <Typography.Text>{result.reason}</Typography.Text>
+          </Descriptions.Item>
+        )}
+        {result.expected_hash && (
+          <Descriptions.Item label={t("audit.verify.expectedHash")}>
+            <Typography.Text copyable={{ text: result.expected_hash }} style={{ fontSize: 11 }}>
+              <code>{result.expected_hash}</code>
+            </Typography.Text>
+          </Descriptions.Item>
+        )}
+        {result.stored_hash && (
+          <Descriptions.Item label={t("audit.verify.storedHash")}>
+            <Typography.Text copyable={{ text: result.stored_hash }} style={{ fontSize: 11 }}>
+              <code>{result.stored_hash}</code>
+            </Typography.Text>
+          </Descriptions.Item>
+        )}
+      </Descriptions>
+    </>
+  );
 }

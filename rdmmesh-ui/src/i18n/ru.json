@@ -235,7 +235,7 @@
     "totalRows": "Всего записей: {{total}}",
     "payload": "Payload",
     "notAdminTitle": "Доступ запрещён",
-    "notAdminDescription": "Просмотр audit log доступен только пользователям с ролью RDM_ADMIN.",
+    "notAdminDescription": "Просмотр audit log доступен только пользователям с ролью RDM_ADMIN либо RDM_AUDITOR.",
     "col": {
       "occurredAt": "Время",
       "eventType": "Тип события",
@@ -254,6 +254,31 @@
       "q": "Free-text по comment",
       "qHint": "ILIKE %…% поиск по полю payload->>'comment' (без учёта регистра).",
       "qPlaceholder": "напр. «откат для теста»"
+    },
+    "export": {
+      "button": "Скачать",
+      "tooltip": "Скачивает audit-журнал с применёнными фильтрами в виде файла. CSV для Excel/таблиц, NDJSON для jq и stream-парсинга. Доступно RDM_ADMIN либо RDM_AUDITOR.",
+      "csv": "CSV (для Excel)",
+      "ndjson": "NDJSON (для jq)",
+      "success": "Выгрузка готова ({{format}})",
+      "error": "Ошибка экспорта — {{status}}: {{message}}"
+    },
+    "verify": {
+      "button": "Проверить целостность",
+      "tooltip": "Пересчитывает SHA-256 hash-chain audit-журнала и сверяет с записанными значениями. Доступно RDM_ADMIN.",
+      "title": "Проверка целостности audit-цепочки",
+      "running": "Проверяем цепочку…",
+      "rerun": "Запустить ещё раз",
+      "close": "Закрыть",
+      "okTitle": "Цепочка цела",
+      "okSubtitle": "Проверено записей: {{checked}} (#{{from}} … #{{to}}). prev_hash и entry_hash сходятся для всех записей в диапазоне.",
+      "brokenTitle": "Цепочка разрушена",
+      "brokenSubtitle": "Первый разрыв — запись #{{firstBrokenAt}}. Это означает, что после записи журнала кто-то модифицировал её содержимое — либо chain не восстанавливалась после PITR-restore. Свяжитесь с compliance.",
+      "rangeLabel": "Диапазон",
+      "checkedShort": "проверено: {{checked}}",
+      "reasonLabel": "Причина разрыва",
+      "expectedHash": "Ожидаемый hash",
+      "storedHash": "Сохранённый hash"
     }
   },
   "history": {

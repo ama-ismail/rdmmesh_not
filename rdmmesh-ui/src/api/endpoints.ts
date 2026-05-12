@@ -1,6 +1,7 @@
-import { apiFetch } from "./client";
+import { apiFetch, apiFetchRaw } from "./client";
 import type {
   ApprovalTask,
+  AuditChainVerifyResult,
   AuditPage,
   AuthMe,
   BulkImportResult,
@@ -97,7 +98,72 @@ export const api = {
     if (filters.q) params.set("q", filters.q);
     return apiFetch<AuditPage>(`/audit?${params.toString()}`);
   },
+
+  // E14 round 1: проверка целостности hash-chain (RDM_ADMIN). Оба параметра
+  // опциональны — backend default'ит на min(id)..max(id), т.е. полная цепочка.
+  verifyAuditChain: (fromId?: number | null, toId?: number | null) => {
+    const params = new URLSearchParams();
+    if (fromId != null) params.set("from", String(fromId));
+    if (toId != null) params.set("to", String(toId));
+    const query = params.toString();
+    return apiFetch<AuditChainVerifyResult>(
+      query ? `/audit/verify-chain?${query}` : "/audit/verify-chain",
+    );
+  },
+
+  // E14 round 4: streaming export audit-журнала для compliance-аудитора.
+  // RDM_ADMIN ∨ RDM_AUDITOR. Использует apiFetchRaw — backend отдаёт
+  // Content-Disposition: attachment, мы качаем как blob и сохраняем через
+  // synthetic <a download>. Filename берётся из Content-Disposition либо
+  // fallback'ом строится на стороне клиента.
+  downloadAuditExport: async (
+    filters: AuditQuery,
+    format: "csv" | "ndjson",
+  ): Promise<void> => {
+    const params = new URLSearchParams();
+    params.set("format", format);
+    if (filters.eventType) params.set("event_type", filters.eventType);
+    if (filters.aggregateType) params.set("aggregate_type", filters.aggregateType);
+    if (filters.aggregateId) params.set("aggregate_id", filters.aggregateId);
+    if (filters.actor) params.set("actor", filters.actor);
+    if (filters.from) params.set("from", filters.from);
+    if (filters.to) params.set("to", filters.to);
+    if (filters.q) params.set("q", filters.q);
+
+    const res = await apiFetchRaw(`/audit/export?${params.toString()}`);
+    const blob = await res.blob();
+    const filename = parseFilenameFromContentDisposition(
+      res.headers.get("content-disposition"),
+    ) ?? `audit-${nowStamp()}.${format}`;
+
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  },
 };
+
+// Парсер RFC 6266: `attachment; filename="audit-20260512-153045.csv"` →
+// `"audit-20260512-153045.csv"`. Игнорирует `filename*=UTF-8''...` — backend
+// сейчас не использует encoded form.
+function parseFilenameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const m = /filename="([^"]+)"/i.exec(header);
+  return m ? m[1] : null;
+}
+
+function nowStamp(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}-${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
+}
 
 // Distribution-side фильтры. Все опциональны — пустой объект даёт latest published.
 export interface DistributionQuery {

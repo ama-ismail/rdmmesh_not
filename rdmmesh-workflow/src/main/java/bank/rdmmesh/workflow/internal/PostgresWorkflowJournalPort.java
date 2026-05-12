@@ -2,6 +2,7 @@ package bank.rdmmesh.workflow.internal;
 
 import java.util.UUID;
 
+import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 
 import bank.rdmmesh.api.port.WorkflowJournalPort;
@@ -35,6 +36,26 @@ public final class PostgresWorkflowJournalPort implements WorkflowJournalPort {
         jdbi.useExtension(WorkflowTransitionDao.class, dao -> dao.insert(
                 eventId, versionId, codesetId, domainId,
                 fromStatus, toStatus, action, actor, comment));
+        return eventId;
+    }
+
+    @Override
+    public UUID recordSystemTransition(
+            Handle handle,
+            UUID versionId,
+            UUID codesetId,
+            UUID domainId,
+            String fromStatus,
+            String toStatus,
+            String action,
+            UUID actor,
+            String comment) {
+        // E14 round 5.1: работа на чужом handle. PublishingService.autoPublish
+        // объединяет publish+journal+outbox в одну Postgres tx.
+        UUID eventId = UUID.randomUUID();
+        handle.attach(WorkflowTransitionDao.class).insert(
+                eventId, versionId, codesetId, domainId,
+                fromStatus, toStatus, action, actor, comment);
         return eventId;
     }
 }

@@ -2,6 +2,8 @@ package bank.rdmmesh.api.port;
 
 import java.util.UUID;
 
+import org.jdbi.v3.core.Handle;
+
 /**
  * Append-only порт в {@code workflow.workflow_transition}. Используется только
  * системными постпроцессами (publishing E6, future hotfix-flow) для логирования
@@ -19,6 +21,21 @@ public interface WorkflowJournalPort {
      * сгенерированный сервером (UUID v4) — пригодится в outbound webhook payload'ах.
      */
     UUID recordSystemTransition(
+            UUID versionId,
+            UUID codesetId,
+            UUID domainId,
+            String fromStatus,
+            String toStatus,
+            String action,
+            UUID actor,
+            String comment);
+
+    /**
+     * E14 round 5.1 — Handle-overload. PublishingService.autoPublish использует
+     * его для atomic-tx с publish/deprecate/outbound.
+     */
+    UUID recordSystemTransition(
+            Handle handle,
             UUID versionId,
             UUID codesetId,
             UUID domainId,

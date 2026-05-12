@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.jdbi.v3.core.Jdbi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,9 +38,28 @@ import bank.rdmmesh.spec.events.VersionPublishedEvent;
  *   <li>Логирует оба system-перехода в {@code workflow.workflow_transition}.</li>
  * </ol>
  *
- * <p><b>Изоляция транзакций</b> — на пилоте OK как best-effort: lifecycle.publish и
- * journal.recordSystemTransition идут в разных транзакциях, как и в E5 для
- * regular transitions. Полный 2PC откладывается до E10 (см. handoff E5 §1.4).
+ * <p><b>Атомарность (E14 round 5.1).</b> Все 5 mutation'ов идут в одной
+ * Postgres tx через {@link Jdbi#inTransaction}:
+ * <ul>
+ *   <li>{@code lifecycle.publish(handle, ...)} — CAS OWNER_APPROVED → PUBLISHED
+ *       + content_hash + signature (authoring schema);</li>
+ *   <li>{@code journal.recordSystemTransition(handle, ...)} — publish-system-action
+ *       INSERT (workflow schema);</li>
+ *   <li>{@code lifecycle.deprecate(handle, ...)} — auto-deprecate предыдущей PUBLISHED
+ *       (если есть);</li>
+ *   <li>{@code journal.recordSystemTransition(handle, ...)} — deprecate-system-action
+ *       INSERT;</li>
+ *   <li>{@code outbound.enqueueVersionPublished(handle, ...)} — outbox INSERT
+ *       (publishing schema).</li>
+ * </ul>
+ * Если любая из 5 операций упадёт — все 5 rollback'аются, ничего не остаётся
+ * inconsistent (status, журнал, outbox).
+ *
+ * <p><b>EventBus.publish — после commit'а.</b> Подписчики (audit-service)
+ * пишут в свои схемы в собственных tx. Этот шаг best-effort (SPEC §3.8):
+ * append-failure audit'а не должен блокировать business-операцию. Сценарий
+ * «publish прошёл, audit-row пропущен» компенсируется реконструкцией из
+ * workflow.workflow_transition.
  *
  * <p><b>Идемпотентность.</b> Если событие пришло повторно (audit replay, ручной
  * trigger), {@link VersionLifecyclePort#publish} вернёт false (статус уже не
@@ -55,6 +75,7 @@ public final class PublishingService {
     /** Версия event-схемы {@code VersionPublishedEvent} (см. spec/events/...). */
     private static final int EVENT_SCHEMA_VERSION = 1;
 
+    private final Jdbi jdbi;
     private final VersionLifecyclePort lifecycle;
     private final PublishedSnapshotPort snapshots;
     private final CatalogReadPort catalog;
@@ -64,6 +85,7 @@ public final class PublishingService {
     private final EventBus eventBus;
 
     public PublishingService(
+            Jdbi jdbi,
             VersionLifecyclePort lifecycle,
             PublishedSnapshotPort snapshots,
             CatalogReadPort catalog,
@@ -71,6 +93,7 @@ public final class PublishingService {
             HmacSigner signer,
             OutboundPort outbound,
             EventBus eventBus) {
+        this.jdbi = jdbi;
         this.lifecycle = lifecycle;
         this.snapshots = snapshots;
         this.catalog = catalog;
@@ -108,66 +131,77 @@ public final class PublishingService {
                 .orElseThrow(() -> new IllegalStateException(
                         "CodeSet missing for version " + versionId));
 
-        // 1) hash + signature
+        // Pre-tx прочитанные read'ы: hash, signature, prev PUBLISHED. canonical
+        // bytes — derived из items'ов (read-only); подпись — pure; prev — read до
+        // CAS, иначе после publish findLatestPublished вернёт уже эту versionId.
         byte[] canonical = snapshots.canonicalSnapshotBytes(versionId);
         String contentHash = HmacSigner.sha256Hex(canonical);
         String iso = Instant.now().toString();
         String signature = signer.signApproval(contentHash, approverOmUserId.toString(), iso);
-
-        // 2) Запоминаем предыдущую PUBLISHED ДО самого publish'а, иначе после CAS
-        // findLatestPublished вернёт уже эту же versionId (она самая свежая по
-        // published_at) и auto-deprecate не сработает.
         Optional<VersionSnapshot> prev = lifecycle.findLatestPublished(version.codesetId());
 
-        // 3) CAS OWNER_APPROVED → PUBLISHED + crypto fields
-        boolean ok = lifecycle.publish(versionId, contentHash, signature, approverOmUserId);
-        if (!ok) {
+        // E14 round 5.1: ОДНА tx на publish + journal + deprecate + journal2 + outbox.
+        // Сборка VersionPublishedEvent — тоже внутри tx, потому что читает
+        // только что записанные publish-поля через shared handle.
+        PublishTxResult txResult = jdbi.inTransaction(handle -> {
+            boolean ok = lifecycle.publish(
+                    handle, versionId, contentHash, signature, approverOmUserId);
+            if (!ok) {
+                return new PublishTxResult(true, null);
+            }
+
+            // Журнал publish'а.
+            journal.recordSystemTransition(
+                    handle,
+                    versionId, version.codesetId(), cs.domainId(),
+                    "OWNER_APPROVED", "PUBLISHED", "publish",
+                    SYSTEM_ACTOR, "auto-publish after owner_approve");
+
+            // Auto-DEPRECATE предыдущей PUBLISHED (если есть и не та же самая).
+            prev.ifPresent(p -> {
+                if (!p.id().equals(versionId)) {
+                    boolean dep = lifecycle.deprecate(handle, p.id());
+                    if (dep) {
+                        journal.recordSystemTransition(
+                                handle,
+                                p.id(), version.codesetId(), cs.domainId(),
+                                "PUBLISHED", "DEPRECATED", "deprecate",
+                                SYSTEM_ACTOR, "auto-deprecate, superseded by " + versionId);
+                    }
+                }
+            });
+
+            // Outbound enqueue. buildPublishedEvent читает только что записанные
+            // publish-поля (content_hash, published_at, published_by) через
+            // shared handle — uncommitted writes в той же tx видны.
+            VersionPublishedEvent event;
+            try {
+                event = buildPublishedEvent(handle, versionId, version.codesetId(), cs, prev.orElse(null));
+                outbound.enqueueVersionPublished(handle, event);
+            } catch (RuntimeException e) {
+                // Outbound сбой → rollback всей tx. Это compliance-trade-off:
+                // лучше не публиковать вовсе, чем оставить status=PUBLISHED без
+                // outbox-записи. Минимальный event для audit построим уже после
+                // rollback'а из ничего — будет SKIPPED.
+                throw e;
+            }
+            return new PublishTxResult(false, event);
+        });
+
+        if (txResult.skipped()) {
             log.warn("publishing: CAS publish для {} вернул false (concurrent transition?)", versionId);
             return PublishOutcome.SKIPPED;
         }
 
-        // 4) журнал publish
-        journal.recordSystemTransition(
-                versionId, version.codesetId(), cs.domainId(),
-                "OWNER_APPROVED", "PUBLISHED", "publish",
-                SYSTEM_ACTOR, "auto-publish after owner_approve");
-
-        // 5) auto-DEPRECATE предыдущей PUBLISHED (если есть и не та же самая)
-        prev.ifPresent(p -> {
-            if (!p.id().equals(versionId)) {
-                boolean dep = lifecycle.deprecate(p.id());
-                if (dep) {
-                    journal.recordSystemTransition(
-                            p.id(), version.codesetId(), cs.domainId(),
-                            "PUBLISHED", "DEPRECATED", "deprecate",
-                            SYSTEM_ACTOR, "auto-deprecate, superseded by " + versionId);
-                }
-            }
-        });
-
         log.info("publishing: PUBLISHED version_id={} codeset_id={} content_hash={} approver={}",
                 versionId, version.codesetId(), contentHash, approverOmUserId);
 
-        // 6) Outbound (E9): enqueue в webhook_outbox для consumer-систем. Отдельная
-        // транзакция от publish'а — best-effort, как и journal'ный split в шаге (4).
-        // При сбое здесь версия уже PUBLISHED и доступна через REST distribution;
-        // потеря именно push-уведомления компенсируется poll-mode'ом consumer'ов.
-        VersionPublishedEvent event = null;
+        // Audit (E10): публикуем VersionPublishedDomainEvent в in-process bus
+        // ПОСЛЕ commit'а основной tx. Audit-subscriber пишет в свою схему в своей
+        // tx — best-effort (SPEC §3.8).
         try {
-            event = buildPublishedEvent(versionId, version.codesetId(), cs, prev.orElse(null));
-            outbound.enqueueVersionPublished(event);
-        } catch (RuntimeException e) {
-            log.warn("publishing: enqueueVersionPublished failed for {}: {}",
-                    versionId, e.toString(), e);
-        }
-
-        // 7) Audit (E10): публикуем VersionPublishedDomainEvent в in-process bus.
-        // Глобальный subscriber rdmmesh-audit получит событие и запишет в audit_log.
-        // Если payload не построился (шаг 6 свалился до сборки) — отправляем
-        // минимальный event только с обязательными полями, чтобы audit не молчал.
-        try {
-            VersionPublishedEvent forBus = event != null
-                    ? event
+            VersionPublishedEvent forBus = txResult.event() != null
+                    ? txResult.event()
                     : minimalPublishedEvent(versionId, version.codesetId(), cs, approverOmUserId, contentHash, signature);
             eventBus.publish(new VersionPublishedDomainEvent(
                     UUID.fromString(forBus.getEventId()),
@@ -180,6 +214,12 @@ public final class PublishingService {
 
         return PublishOutcome.PUBLISHED;
     }
+
+    /**
+     * Результат write-tx autoPublish. skipped=true → CAS вернул false
+     * (concurrent transition); skipped=false + event → все 5 операций commit'нуты.
+     */
+    private record PublishTxResult(boolean skipped, VersionPublishedEvent event) {}
 
     /**
      * Минимальный payload, если основной {@link #buildPublishedEvent} не собрался
@@ -204,8 +244,11 @@ public final class PublishingService {
     }
 
     private VersionPublishedEvent buildPublishedEvent(
+            org.jdbi.v3.core.Handle handle,
             UUID versionId, UUID codesetId, CodeSetSnapshot cs, VersionSnapshot prev) {
-        PublishedVersionDetails details = lifecycle.findPublishedDetails(versionId)
+        // E14 round 5.1: shared handle — read только что записанных publish-полей
+        // в той же tx (separate jdbi-call увидел бы pre-publish state).
+        PublishedVersionDetails details = lifecycle.findPublishedDetails(handle, versionId)
                 .orElseThrow(() -> new IllegalStateException(
                         "версия " + versionId + " не в PUBLISHED после publish CAS"));
         DomainSnapshot domain = catalog.findDomain(cs.domainId()).orElse(null);

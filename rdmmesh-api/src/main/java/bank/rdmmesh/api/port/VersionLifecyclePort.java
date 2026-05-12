@@ -6,6 +6,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
+import org.jdbi.v3.core.Handle;
+
 /**
  * Узкий write-side контракт для управления статусом {@code authoring.code_set_version}.
  * SPEC §3.3 закрепляет: schemas {@code catalog} / {@code authoring} пишет только модуль
@@ -46,6 +48,30 @@ public interface VersionLifecyclePort {
             TransitionEffect effect);
 
     /**
+     * E14 round 5: atomic-decision overload. Принимает чужой {@link Handle} и
+     * выполняет CAS + side-effects на нём — без открытия собственной транзакции.
+     * Это позволяет вызывающему коду (например, {@code WorkflowService.transition})
+     * объединить authoring-update (status CAS) и workflow-INSERT'ы (transition log
+     * + approval task) в одну Postgres транзакцию через {@code Jdbi.inTransaction}.
+     *
+     * <p>В прежней версии (без Handle) состояние и журнал писались в двух разных
+     * tx — между ними был зазор: CAS прошёл, INSERT упал → status changed,
+     * журнала нет. Теперь caller контролирует tx boundary, и обе операции
+     * commit'ятся вместе либо обе rollback'аются.
+     *
+     * <p>Безарг overload {@link #transition(UUID, String, String, UUID, TransitionEffect)}
+     * остаётся для обратной совместимости — он открывает собственную tx внутри
+     * adapter'а.
+     */
+    boolean transition(
+            Handle handle,
+            UUID versionId,
+            String fromStatus,
+            String toStatus,
+            UUID actor,
+            TransitionEffect effect);
+
+    /**
      * Атомарно опубликовать версию (CAS OWNER_APPROVED → PUBLISHED) с содержимым подписи.
      * Вызывает PublishingService после успешного {@code OwnerApproved} транзита.
      *
@@ -54,8 +80,19 @@ public interface VersionLifecyclePort {
      */
     boolean publish(UUID versionId, String contentHash, String signature, UUID publishedBy);
 
+    /**
+     * E14 round 5.1 — Handle-overload publish'а. См. javadoc
+     * {@link #transition(Handle, UUID, String, String, UUID, TransitionEffect)} —
+     * та же мотивация: caller контролирует tx boundary и объединяет publish с
+     * journal-INSERT'ом + outbox-INSERT'ом в одну Postgres tx.
+     */
+    boolean publish(Handle handle, UUID versionId, String contentHash, String signature, UUID publishedBy);
+
     /** Атомарно перевести PUBLISHED → DEPRECATED (для autodeprecate предыдущей PUBLISHED). */
     boolean deprecate(UUID versionId);
+
+    /** E14 round 5.1 — Handle-overload deprecate'а. */
+    boolean deprecate(Handle handle, UUID versionId);
 
     /** Текущая published-версия codeset'а (на момент вызова), если есть. */
     Optional<VersionSnapshot> findLatestPublished(UUID codesetId);
@@ -69,6 +106,14 @@ public interface VersionLifecyclePort {
      * не в {@code PUBLISHED}/{@code DEPRECATED} (то есть crypto fields ещё не заполнены).
      */
     Optional<PublishedVersionDetails> findPublishedDetails(UUID versionId);
+
+    /**
+     * E14 round 5.1 — Handle-overload findPublishedDetails. Нужен PublishingService.autoPublish,
+     * чтобы прочитать только что записанные publish-поля (content_hash, signature,
+     * published_at, published_by) в той же tx что и сам publish. Без этого
+     * uncommitted write'ы из основной tx не видны в read через отдельный handle.
+     */
+    Optional<PublishedVersionDetails> findPublishedDetails(Handle handle, UUID versionId);
 
     /**
      * Side-effects в одной транзакции с CAS статуса. Workflow указывает явно,

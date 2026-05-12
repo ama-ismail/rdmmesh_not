@@ -4,6 +4,7 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,6 +56,18 @@ public final class OutboxOutboundAdapter implements OutboundPort {
 
     @Override
     public void enqueueVersionPublished(VersionPublishedEvent event) {
+        // Backward-compatible: открываем собственную tx и делегируем на handle-вариант.
+        jdbi.useTransaction(handle -> enqueueOnHandle(handle, event));
+    }
+
+    @Override
+    public void enqueueVersionPublished(Handle handle, VersionPublishedEvent event) {
+        // E14 round 5.1: работа на чужом handle — caller (PublishingService.autoPublish)
+        // объединяет publish+journal+outbox в одну Postgres tx.
+        enqueueOnHandle(handle, event);
+    }
+
+    private void enqueueOnHandle(Handle handle, VersionPublishedEvent event) {
         if (event == null) throw new IllegalArgumentException("event is null");
         byte[] payload;
         try {
@@ -67,36 +80,34 @@ public final class OutboxOutboundAdapter implements OutboundPort {
         String domainName = event.getDomainName();
         String codesetName = event.getCodesetName();
 
-        jdbi.useTransaction(handle -> {
-            SubscriptionDao subs = handle.attach(SubscriptionDao.class);
-            WebhookOutboxDao outbox = handle.attach(WebhookOutboxDao.class);
+        SubscriptionDao subs = handle.attach(SubscriptionDao.class);
+        WebhookOutboxDao outbox = handle.attach(WebhookOutboxDao.class);
 
-            int matched = 0;
-            int enqueued = 0;
-            for (SubscriptionRow s : subs.findActive()) {
-                var filter = SubscriptionFilterMatcher.parse(json, s.filterJson());
-                if (!SubscriptionFilterMatcher.matches(
-                        filter, domainName, codesetName, EVENT_VERSION_PUBLISHED)) {
-                    continue;
-                }
-                matched++;
-
-                byte[] key;
-                try {
-                    key = keys.resolveKey(s.secretId());
-                } catch (RuntimeException e) {
-                    log.warn("outbound: skip subscription {} ({}): не удалось резолвить secret_id={}: {}",
-                            s.id(), s.url(), s.secretId(), e.toString());
-                    continue;
-                }
-                String signature = WebhookHmac.hexSignature(payload, key);
-                int rows = outbox.insert(
-                        UUID.randomUUID(), s.id(), eventId,
-                        EVENT_VERSION_PUBLISHED, payloadJson, signature);
-                if (rows > 0) enqueued++;
+        int matched = 0;
+        int enqueued = 0;
+        for (SubscriptionRow s : subs.findActive()) {
+            var filter = SubscriptionFilterMatcher.parse(json, s.filterJson());
+            if (!SubscriptionFilterMatcher.matches(
+                    filter, domainName, codesetName, EVENT_VERSION_PUBLISHED)) {
+                continue;
             }
-            log.info("outbound: enqueueVersionPublished event_id={} version={} matched={} enqueued={}",
-                    eventId, event.getVersion(), matched, enqueued);
-        });
+            matched++;
+
+            byte[] key;
+            try {
+                key = keys.resolveKey(s.secretId());
+            } catch (RuntimeException e) {
+                log.warn("outbound: skip subscription {} ({}): не удалось резолвить secret_id={}: {}",
+                        s.id(), s.url(), s.secretId(), e.toString());
+                continue;
+            }
+            String signature = WebhookHmac.hexSignature(payload, key);
+            int rows = outbox.insert(
+                    UUID.randomUUID(), s.id(), eventId,
+                    EVENT_VERSION_PUBLISHED, payloadJson, signature);
+            if (rows > 0) enqueued++;
+        }
+        log.info("outbound: enqueueVersionPublished event_id={} version={} matched={} enqueued={}",
+                eventId, event.getVersion(), matched, enqueued);
     }
 }

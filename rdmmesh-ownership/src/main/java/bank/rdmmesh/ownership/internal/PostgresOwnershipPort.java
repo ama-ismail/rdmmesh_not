@@ -6,6 +6,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,40 +82,50 @@ public final class PostgresOwnershipPort implements OwnershipPort {
     @Override
     public void applyChangeEvent(
             UUID assetId, String assetType, OwnershipDelta delta, String sourceEventId) {
-        jdbi.useTransaction(handle -> {
-            AssetOwnershipDao dao = handle.attach(AssetOwnershipDao.class);
+        // Backward-compatible: открываем свою tx и делегируем.
+        jdbi.useTransaction(handle ->
+                applyChangeEvent(handle, assetId, assetType, delta, sourceEventId));
+    }
 
-            // Removals идут первыми, чтобы при «move» (user был в одной коллекции, стал в
-            // другой) последующий UPSERT не получил конфликт по uniq-ключу.
-            for (UUID userId : delta.ownersRemoved()) {
-                dao.delete(assetId, assetType, userId, "OWNER");
-            }
-            for (UUID userId : delta.expertsRemoved()) {
-                dao.delete(assetId, assetType, userId, "EXPERT");
-                if (EXPERT_ACTS_AS_STEWARD) {
-                    dao.delete(assetId, assetType, userId, "STEWARD");
-                }
-            }
-            for (UUID userId : delta.approversRemoved()) {
-                dao.delete(assetId, assetType, userId, "APPROVER");
-            }
+    @Override
+    public void applyChangeEvent(
+            Handle handle, UUID assetId, String assetType,
+            OwnershipDelta delta, String sourceEventId) {
+        // E14 round 5.2: работа на чужом handle. OwnershipWebhookService объединяет
+        // delta-apply + recordIfAbsent в processed_om_event + (опц.) mirror UPSERT
+        // в одну Postgres tx.
+        AssetOwnershipDao dao = handle.attach(AssetOwnershipDao.class);
 
-            // Additions: is_provisional=false (OM — мастер, его слово финальное), assigned_by
-            // не известен из webhook'а (OM не отдаёт «кто назначил» в payload'е) — оставляем
-            // null. source_event_id — последний event, который привёл к назначению этой роли.
-            for (UUID userId : delta.ownersAdded()) {
-                dao.upsert(assetId, assetType, userId, "OWNER", false, null, sourceEventId);
+        // Removals идут первыми, чтобы при «move» (user был в одной коллекции, стал в
+        // другой) последующий UPSERT не получил конфликт по uniq-ключу.
+        for (UUID userId : delta.ownersRemoved()) {
+            dao.delete(assetId, assetType, userId, "OWNER");
+        }
+        for (UUID userId : delta.expertsRemoved()) {
+            dao.delete(assetId, assetType, userId, "EXPERT");
+            if (EXPERT_ACTS_AS_STEWARD) {
+                dao.delete(assetId, assetType, userId, "STEWARD");
             }
-            for (UUID userId : delta.expertsAdded()) {
-                dao.upsert(assetId, assetType, userId, "EXPERT", false, null, sourceEventId);
-                if (EXPERT_ACTS_AS_STEWARD) {
-                    dao.upsert(assetId, assetType, userId, "STEWARD", false, null, sourceEventId);
-                }
+        }
+        for (UUID userId : delta.approversRemoved()) {
+            dao.delete(assetId, assetType, userId, "APPROVER");
+        }
+
+        // Additions: is_provisional=false (OM — мастер, его слово финальное), assigned_by
+        // не известен из webhook'а (OM не отдаёт «кто назначил» в payload'е) — оставляем
+        // null. source_event_id — последний event, который привёл к назначению этой роли.
+        for (UUID userId : delta.ownersAdded()) {
+            dao.upsert(assetId, assetType, userId, "OWNER", false, null, sourceEventId);
+        }
+        for (UUID userId : delta.expertsAdded()) {
+            dao.upsert(assetId, assetType, userId, "EXPERT", false, null, sourceEventId);
+            if (EXPERT_ACTS_AS_STEWARD) {
+                dao.upsert(assetId, assetType, userId, "STEWARD", false, null, sourceEventId);
             }
-            for (UUID userId : delta.approversAdded()) {
-                dao.upsert(assetId, assetType, userId, "APPROVER", false, null, sourceEventId);
-            }
-        });
+        }
+        for (UUID userId : delta.approversAdded()) {
+            dao.upsert(assetId, assetType, userId, "APPROVER", false, null, sourceEventId);
+        }
 
         log.info(
                 "ownership: applyChangeEvent asset_id={} asset_type={} event={}"
@@ -141,19 +152,42 @@ public final class PostgresOwnershipPort implements OwnershipPort {
             Set<UUID> desiredOwners,
             Set<UUID> desiredExperts,
             Set<UUID> desiredApprovers) {
-        return jdbi.withExtension(AssetOwnershipDao.class, dao -> {
-            List<AssetOwnershipRow> current = dao.findByAsset(assetId, assetType);
-            Set<UUID> currentOwners = collect(current, "OWNER");
-            Set<UUID> currentExperts = collect(current, "EXPERT");
-            Set<UUID> currentApprovers = collect(current, "APPROVER");
-            return new OwnershipDelta(
-                    diffAdded(desiredOwners, currentOwners),
-                    diffRemoved(desiredOwners, currentOwners),
-                    diffAdded(desiredExperts, currentExperts),
-                    diffRemoved(desiredExperts, currentExperts),
-                    diffAdded(desiredApprovers, currentApprovers),
-                    diffRemoved(desiredApprovers, currentApprovers));
-        });
+        return jdbi.withExtension(AssetOwnershipDao.class, dao ->
+                computeDeltaInternal(dao, assetId, assetType,
+                        desiredOwners, desiredExperts, desiredApprovers));
+    }
+
+    /**
+     * E14 round 5.2 — Handle-overload. Read-only, но идёт через shared handle:
+     * OwnershipWebhookService считает delta уже внутри tx, чтобы apply работал
+     * по тому же snapshot'у БД и не получил «гонку» с concurrent ownership-write'ом.
+     */
+    public OwnershipDelta computeDelta(
+            Handle handle,
+            UUID assetId,
+            String assetType,
+            Set<UUID> desiredOwners,
+            Set<UUID> desiredExperts,
+            Set<UUID> desiredApprovers) {
+        return computeDeltaInternal(handle.attach(AssetOwnershipDao.class),
+                assetId, assetType, desiredOwners, desiredExperts, desiredApprovers);
+    }
+
+    private static OwnershipDelta computeDeltaInternal(
+            AssetOwnershipDao dao,
+            UUID assetId, String assetType,
+            Set<UUID> desiredOwners, Set<UUID> desiredExperts, Set<UUID> desiredApprovers) {
+        List<AssetOwnershipRow> current = dao.findByAsset(assetId, assetType);
+        Set<UUID> currentOwners = collect(current, "OWNER");
+        Set<UUID> currentExperts = collect(current, "EXPERT");
+        Set<UUID> currentApprovers = collect(current, "APPROVER");
+        return new OwnershipDelta(
+                diffAdded(desiredOwners, currentOwners),
+                diffRemoved(desiredOwners, currentOwners),
+                diffAdded(desiredExperts, currentExperts),
+                diffRemoved(desiredExperts, currentExperts),
+                diffAdded(desiredApprovers, currentApprovers),
+                diffRemoved(desiredApprovers, currentApprovers));
     }
 
     private static Set<UUID> collect(List<AssetOwnershipRow> rows, String role) {

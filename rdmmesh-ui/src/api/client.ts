@@ -54,6 +54,31 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   return body as T;
 }
 
+/**
+ * E14 round 4 — raw-fetch для download'ов (audit export, в будущем — bulk-export
+ * distribution'а). Возвращает {@link Response} без auto-парсинга — caller сам
+ * читает blob/stream. JWT прокидывается так же как в {@link apiFetch}.
+ *
+ * <p>На non-2xx бросает {@link ApiError} с body как text (download endpoint'ы
+ * обычно возвращают plain-text error либо ProblemDetails JSON).
+ */
+export async function apiFetchRaw(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = await getToken();
+  const headers = new Headers(init.headers ?? {});
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const res = await fetch(buildUrl(path), { ...init, headers });
+  if (!res.ok) {
+    const ct = res.headers.get("content-type") ?? "";
+    const body: unknown = ct.includes("application/json")
+      ? await res.json().catch(() => null)
+      : await res.text().catch(() => null);
+    const msg = extractErrorMessage(body) ?? `${res.status} ${res.statusText}`;
+    throw new ApiError(res.status, msg, body);
+  }
+  return res;
+}
+
 function extractErrorMessage(body: unknown): string | null {
   if (body == null) return null;
   if (typeof body === "string") return body;

@@ -59,7 +59,7 @@ public final class PublishingModule {
         HmacSigner signer = new HmacSigner(signingKey);
         OutboundPort outbound = new OutboxOutboundAdapter(jdbi, webhookKey, json);
         PublishingService service = new PublishingService(
-                lifecycle, snapshots, catalog, journal, signer, outbound, eventBus);
+                jdbi, lifecycle, snapshots, catalog, journal, signer, outbound, eventBus);
         service.registerOn(eventBus);
         SubscriptionService subscriptions = new SubscriptionService(jdbi, json);
         WebhookDeliveryWorker worker = new WebhookDeliveryWorker(jdbi, deliveryTickSeconds);

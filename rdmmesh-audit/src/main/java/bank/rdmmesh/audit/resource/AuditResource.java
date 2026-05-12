@@ -1,10 +1,17 @@
 package bank.rdmmesh.audit.resource;
 
+import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -19,9 +26,11 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.StreamingOutput;
 
 import bank.rdmmesh.api.security.RdmmeshPrincipal;
 import bank.rdmmesh.audit.internal.AuditChainVerifier;
+import bank.rdmmesh.audit.internal.AuditExportWriter;
 import bank.rdmmesh.audit.internal.dao.AuditLogDao;
 import io.dropwizard.auth.Auth;
 import org.jdbi.v3.core.Jdbi;
@@ -46,11 +55,12 @@ import org.jdbi.v3.core.Jdbi;
  * payload как {@code Map} (jsonb распарсен на сервере, чтобы клиент не парсил
  * вторично).
  *
- * <p>Frontend-доступ — только {@code RDM_ADMIN}. SPEC §3.3 говорит «audit
+ * <p>Frontend-доступ — {@code RDM_ADMIN} либо {@code RDM_AUDITOR} (E14 round 3,
+ * закрывает open question E10 §6 #15). RDM_AUDITOR — read-only compliance-роль:
+ * читает audit и запускает verify-chain, но не имеет прав admin'а
+ * (subscriptions/closure-rebuild недоступны). SPEC §3.3 говорит «audit
  * подписан на event-bus, никого не читает» — это про write-side; read-side
- * через REST появляется здесь как minimal viable export. {@code RDM_AUDITOR}
- * как отдельная роль ещё не введена в Keycloak realm (open question E10 §6 #15);
- * до того момента admin'ы — единственные потребители.
+ * через REST появляется здесь как minimal viable export.
  *
  * <p>Этот resource НЕ нарушает изоляцию audit-модуля: он использует только
  * {@link AuditLogDao} (свой же internal-пакет) и api-security
@@ -59,11 +69,19 @@ import org.jdbi.v3.core.Jdbi;
  */
 @Path("/audit")
 @Produces(MediaType.APPLICATION_JSON)
-@RolesAllowed("RDM_ADMIN")
+@RolesAllowed({"RDM_ADMIN", "RDM_AUDITOR"})
 public final class AuditResource {
 
     private static final int DEFAULT_SIZE = 50;
     private static final int MAX_SIZE = 1000;
+
+    /** Шаг pagination для StreamingOutput'а export'а. Выбран как баланс между
+     *  числом round-trip'ов в БД и hold-в-памяти. На пилоте 1000 даёт ~100 KB
+     *  JSON держится в JVM heap'е на каждой странице — приемлемо. */
+    private static final int EXPORT_PAGE_SIZE = 1000;
+
+    private static final DateTimeFormatter FILENAME_TIMESTAMP =
+            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
 
     private final Jdbi jdbi;
     private final ObjectMapper json;
@@ -175,7 +193,8 @@ public final class AuditResource {
     }
 
     /**
-     * E14 round 1 — verify hash-chain. Открыт только {@code RDM_ADMIN}.
+     * E14 round 1 — verify hash-chain. Доступен {@code RDM_ADMIN} либо
+     * {@code RDM_AUDITOR} (наследует class-level {@code @RolesAllowed}).
      *
      * <pre>
      *   GET /api/v1/audit/verify-chain
@@ -247,6 +266,131 @@ public final class AuditResource {
                 r.reason(),
                 r.expectedHash(),
                 r.storedHash());
+    }
+
+    /**
+     * E14 round 4 — audit-export endpoint. Закрывает follow-up E10 §3 #3 /
+     * E11.2d §3 #3 для compliance-аудитора, которому нужен offline-snapshot
+     * журнала.
+     *
+     * <pre>
+     *   GET /api/v1/audit/export       @RolesAllowed("RDM_ADMIN","RDM_AUDITOR")
+     *     ?format=csv|ndjson           (csv по умолчанию)
+     *     + те же фильтры что и /audit (event_type, aggregate_type,
+     *       aggregate_id, actor, from, to, q)
+     * </pre>
+     *
+     * <p>Особенности:
+     * <ul>
+     *   <li><b>Streaming.</b> Ответ — {@code StreamingOutput} с pagination-loop'ом
+     *       по {@code EXPORT_PAGE_SIZE=1000}. Heap'у нужно ~1 MB одновременно,
+     *       не зависит от размера выгрузки.</li>
+     *   <li><b>Snapshot consistency.</b> {@code snapshotMaxId = findMaxId()} в
+     *       начале фиксирует «верх» журнала; concurrent INSERT'ы в audit_log
+     *       поверх snapshot'а не попадают в выгрузку. ORDER BY {@code id ASC} даёт
+     *       стабильный порядок.</li>
+     *   <li><b>Content-Disposition.</b> Имя файла —
+     *       {@code audit-YYYYMMDD-HHmmss.csv|ndjson} (UTC).</li>
+     *   <li><b>CSV формат:</b> RFC 4180, header-row + N data-rows.</li>
+     *   <li><b>NDJSON формат:</b> один JSON-object на строку, payload и
+     *       payload_canonical inline (не escape-string).</li>
+     * </ul>
+     */
+    @GET
+    @Path("/export")
+    public Response export(
+            @Auth RdmmeshPrincipal principal,
+            @QueryParam("event_type") String eventType,
+            @QueryParam("aggregate_type") String aggregateType,
+            @QueryParam("aggregate_id") String aggregateIdRaw,
+            @QueryParam("actor") String actorRaw,
+            @QueryParam("from") String fromRaw,
+            @QueryParam("to") String toRaw,
+            @QueryParam("q") String freeText,
+            @QueryParam("format") String formatRaw) {
+
+        UUID aggregateId = parseUuid(aggregateIdRaw, "aggregate_id");
+        UUID actor = parseUuid(actorRaw, "actor");
+        OffsetDateTime fromTs = parseInstant(fromRaw, "from");
+        OffsetDateTime toTs = parseInstant(toRaw, "to");
+        String etype = blankToNull(eventType);
+        String atype = blankToNull(aggregateType);
+        String freeTextPattern = (freeText == null || freeText.isBlank())
+                ? null
+                : "%" + freeText.trim().replace("%", "\\%").replace("_", "\\_") + "%";
+
+        String format = (formatRaw == null || formatRaw.isBlank())
+                ? "csv"
+                : formatRaw.trim().toLowerCase(Locale.ROOT);
+        if (!"csv".equals(format) && !"ndjson".equals(format)) {
+            throw new WebApplicationException(
+                    "format must be 'csv' or 'ndjson'", Response.Status.BAD_REQUEST);
+        }
+
+        long snapshotMaxId = jdbi.withExtension(AuditLogDao.class, AuditLogDao::findMaxId)
+                .orElse(0L);
+
+        StreamingOutput so = output -> writeExport(
+                output, format, snapshotMaxId,
+                etype, atype, aggregateId, actor, fromTs, toTs, freeTextPattern);
+
+        String filename = "audit-"
+                + OffsetDateTime.now(ZoneOffset.UTC).format(FILENAME_TIMESTAMP)
+                + "." + format;
+        String mediaType = "csv".equals(format) ? "text/csv" : "application/x-ndjson";
+
+        return Response.ok(so)
+                .type(mediaType + "; charset=UTF-8")
+                .header("Content-Disposition", "attachment; filename=\"" + filename + "\"")
+                .header("X-RDM-Snapshot-Max-Id", Long.toString(snapshotMaxId))
+                .build();
+    }
+
+    private void writeExport(
+            java.io.OutputStream output,
+            String format,
+            long snapshotMaxId,
+            String etype,
+            String atype,
+            UUID aggregateId,
+            UUID actor,
+            OffsetDateTime fromTs,
+            OffsetDateTime toTs,
+            String freeTextPattern) throws IOException {
+
+        // BufferedWriter снижает количество syscall'ов; flush в конце через
+        // try-with-resources (закрытие BufferedWriter → flush + закрытие OSW).
+        try (Writer w = new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8))) {
+            if ("csv".equals(format)) {
+                AuditExportWriter.writeCsvHeader(w);
+            }
+            if (snapshotMaxId == 0) {
+                // Пустой журнал. Header (если CSV) уже выписан, body нет.
+                return;
+            }
+            long offset = 0;
+            while (true) {
+                final long offsetCopy = offset;
+                List<AuditLogDao.ExportRow> page = jdbi.withExtension(AuditLogDao.class, dao ->
+                        dao.findExportPage(snapshotMaxId,
+                                etype, atype, aggregateId, actor, fromTs, toTs, freeTextPattern,
+                                EXPORT_PAGE_SIZE, offsetCopy));
+                if (page.isEmpty()) {
+                    return;
+                }
+                for (AuditLogDao.ExportRow r : page) {
+                    if ("csv".equals(format)) {
+                        AuditExportWriter.writeCsvRow(w, r);
+                    } else {
+                        AuditExportWriter.writeNdjsonRow(w, r);
+                    }
+                }
+                if (page.size() < EXPORT_PAGE_SIZE) {
+                    return;
+                }
+                offset += EXPORT_PAGE_SIZE;
+            }
+        }
     }
 
     public record Page(

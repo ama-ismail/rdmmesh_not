@@ -84,5 +84,9 @@ export const qk = {
         q: string | null;
       },
     ) => ["audit", "list", page, size, filters] as const,
+    // E14 round 1 — verify hash-chain. Ключ включает range, чтобы separate
+    // запросы full-chain и sub-range кэшировались независимо.
+    verify: (fromId: number | null, toId: number | null) =>
+      ["audit", "verify", fromId, toId] as const,
   },
 };

@@ -262,6 +262,19 @@ export interface AuditFilters {
   q?: string | null;
 }
 
+// E14 round 1: hash-chain verify. Snake_case — backend VerifyChainResponse.
+// `verified=true` → first_broken_at/reason/expected_hash/stored_hash = null.
+export interface AuditChainVerifyResult {
+  from: number;
+  to: number;
+  checked: number;
+  verified: boolean;
+  first_broken_at?: number | null;
+  reason?: string | null;
+  expected_hash?: string | null;
+  stored_hash?: string | null;
+}
+
 // ─── Distribution (camelCase, см. RdmDistributionResource — Java records без @JsonProperty) ───
 //
 // Внимание: формат отличается от authoring/ItemsPage (там snake_case).

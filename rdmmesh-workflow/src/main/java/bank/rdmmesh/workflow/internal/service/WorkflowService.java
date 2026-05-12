@@ -45,12 +45,19 @@ import bank.rdmmesh.workflow.internal.dao.WorkflowTransitionDao.TransitionRow;
  *       подписываются в E10/E6).</li>
  * </ol>
  *
- * <p><b>Изоляция транзакций.</b> CAS статуса делается через {@link VersionLifecyclePort}
- * в схеме {@code authoring}, а INSERT в transition log — в схеме {@code workflow}. Это
- * две разные транзакции. Если CAS прошёл, а вторая транзакция упала — у нас несинхронизованные
- * статус и журнал. Для пилота это приемлемо (журнал самозалечивается на следующих
- * transition'ах: история восстанавливается из {@code created_at} и текущего статуса).
- * Полный 2PC / сага — будущая работа, упомянем в handoff'е.
+ * <p><b>Атомарность (E14 round 5).</b> Status CAS (authoring schema) + INSERT
+ * в transition log + UPSERT approval_task (workflow schema) теперь идут в
+ * <b>одной</b> Postgres tx через {@link Jdbi#inTransaction}. Promote'нутый
+ * {@link VersionLifecyclePort#transition(org.jdbi.v3.core.Handle, UUID, String,
+ * String, UUID, VersionLifecyclePort.TransitionEffect)} overload принимает
+ * shared Handle. Если любая из трёх операций упадёт — Postgres rollback'ает
+ * все три, и журнал остаётся консистентным со статусом версии.
+ *
+ * <p><b>EventBus.publish — после commit'а.</b> Подписчики (audit, publishing
+ * auto-publish) подписываются на in-process bus и пишут в свои схемы в
+ * собственных tx. Если такая subscriber-tx упадёт — основная workflow-tx
+ * уже зафиксирована и не откатывается. Это best-effort по design'у audit'а
+ * (SPEC §3.8): append-failure не должен блокировать бизнес-операцию.
  */
 public final class WorkflowService {
 
@@ -100,22 +107,32 @@ public final class WorkflowService {
                 reviewers, assetRoles, baseRoles, comment);
         Decision decision = StateMachine.validate(req);
 
-        // 1) CAS статуса + reviewer/approver side-effect (одна транзакция authoring'а).
         TransitionEffect effect = new TransitionEffect(
                 decision.recordReviewer(), decision.setApprover());
-        boolean ok = lifecycle.transition(
-                versionId, version.status(), targetStatus, actor, effect);
-        if (!ok) {
-            // Concurrent transition: пока мы валидировали, кто-то перевёл версию в другой статус.
-            throw new IllegalStateTransitionException(
-                    "Конкурентный transition: версия " + versionId
-                            + " больше не в статусе " + version.status());
-        }
 
-        // 2) Журнал и approval-task — отдельная транзакция в workflow-схеме.
+        // Кандидаты на следующую approval-task'у выводим заранее, ДО открытия
+        // tx: ownership-lookup делает свою короткую read-tx, и держать её
+        // внутри write-tx — увеличивает время удержания row-lock'а на
+        // code_set_version. Plain pre-fetch вне tx — корректен (роли в OM
+        // меняются через webhook, который тоже идёт через свою tx).
+        String nextRole = StateMachine.nextRequiredRole(to);
+        UUID[] candidates = (nextRole == null)
+                ? null
+                : candidatesFor(version.codesetId(), nextRole);
+
         UUID transitionId = UUID.randomUUID();
         Instant occurredAt = Instant.now();
-        jdbi.useTransaction(handle -> {
+
+        // E14 round 5: ОДНА tx на CAS статуса (authoring) + journal INSERT
+        // (workflow) + approval-task UPSERT (workflow). Раньше эти три шага
+        // были в трёх независимых tx — между ними была щель для inconsistency
+        // (status changed, журнала нет).
+        boolean applied = jdbi.inTransaction(handle -> {
+            boolean ok = lifecycle.transition(
+                    handle, versionId, version.status(), targetStatus, actor, effect);
+            if (!ok) {
+                return false;
+            }
             handle.attach(WorkflowTransitionDao.class).insert(
                     transitionId,
                     versionId,
@@ -130,15 +147,22 @@ public final class WorkflowService {
             ApprovalTaskDao tasks = handle.attach(ApprovalTaskDao.class);
             // Закрыть текущую задачу для актора (он же её только что выполнил).
             tasks.closeAll(versionId, actor);
-
             // Открыть следующую задачу для соответствующей роли — если есть.
-            String nextRole = StateMachine.nextRequiredRole(to);
             if (nextRole != null) {
-                UUID[] candidates = candidatesFor(version.codesetId(), nextRole);
                 tasks.upsertOpen(versionId, version.codesetId(), codeSet.domainId(),
                         nextRole, candidates);
             }
+            return true;
         });
+
+        if (!applied) {
+            // Concurrent transition: пока мы валидировали и зашли в tx, кто-то
+            // перевёл версию в другой статус. CAS вернул 0, мы откатились —
+            // status в БД не менялся.
+            throw new IllegalStateTransitionException(
+                    "Конкурентный transition: версия " + versionId
+                            + " больше не в статусе " + version.status());
+        }
 
         log.info("workflow: {} → {} version_id={} action={} actor={}",
                 version.status(), targetStatus, versionId, decision.action(), actor);
@@ -148,17 +172,20 @@ public final class WorkflowService {
                 version.status(), targetStatus, decision.action(),
                 actor, comment, occurredAt);
         try {
+            // Publish ПОСЛЕ commit'а: подписчики (audit, publishing.autoPublish)
+            // должны видеть зафиксированное состояние, не in-flight tx. Если
+            // тут упадёт — основная tx уже на диске; audit best-effort (SPEC §3.8).
             eventBus.publish(new WorkflowTransitionDomainEvent(
                     transitionId,
                     OffsetDateTime.ofInstant(occurredAt, ZoneOffset.UTC),
                     event));
         } catch (RuntimeException e) {
-            // Подписчики не должны валить транзицию — журнал и статус уже зафиксированы.
             log.warn("workflow: event publish failed (transition_id={}): {}",
                     transitionId, e.toString());
         }
         return event;
     }
+
 
     public List<WorkflowTransitionEvent> history(UUID versionId) {
         // Проверим что версия есть — иначе history впустую вернёт пустой список и проглотит 404.
