@@ -45,4 +45,24 @@ class EnvWebhookKeyAdapterTest {
         assertThatThrownBy(() -> adapter.resolveKey("missing-secret"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    // ── E14 round 6: resolveAllKeys (rotation overlap) ──────────────────────────
+
+    @Test
+    void resolve_all_keys_is_single_primary_without_previous_env() {
+        // RDM_WEBHOOK_KEY_*_PREVIOUS в тест-окружении не задан → только primary (=fallback).
+        var adapter = EnvWebhookKeyAdapter.withDevFallback(
+                "rdmmesh-dev-webhook-key-must-be-32-bytes-or-more");
+        var keys = adapter.resolveAllKeys("primary");
+        assertThat(keys).hasSize(1);
+        assertThat(keys.get(0)).isEqualTo(adapter.resolveKey("primary"));
+    }
+
+    @Test
+    void resolve_all_keys_rejects_blank_secret_id() {
+        var adapter = EnvWebhookKeyAdapter.withDevFallback(
+                "rdmmesh-dev-webhook-key-must-be-32-bytes-or-more");
+        assertThatThrownBy(() -> adapter.resolveAllKeys(" "))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

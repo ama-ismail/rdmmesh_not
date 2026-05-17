@@ -140,6 +140,8 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         // E7 — Ownership webhook receiver. POST /webhooks/om/ownership принимает
         // ChangeEvent'ы из OM Event Subscription. HMAC-ключ — отдельный от publishing'а
         // (тот для подписи snapshot'ов; этот — для inbound аутентификации webhook'а).
+        // E14 round 6: fromEnv дополнительно читает RDM_OM_WEBHOOK_HMAC_KEY_PREVIOUS —
+        // overlap-ключ на время zero-downtime ротации (docs/runbooks/hmac-key-rotation.md).
         CatalogMirrorPort catalogMirror = CatalogModule.buildMirrorPort(jdbi);
         SigningKeyPort omWebhookKey = EnvSigningKeyAdapter.fromEnv(
                 "RDM_OM_WEBHOOK_HMAC_KEY",

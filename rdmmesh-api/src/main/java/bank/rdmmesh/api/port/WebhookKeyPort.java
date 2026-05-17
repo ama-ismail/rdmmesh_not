@@ -1,5 +1,7 @@
 package bank.rdmmesh.api.port;
 
+import java.util.List;
+
 /**
  * Резолвит {@code secret_id} subscription'а (Vault path / SOPS key id, SPEC §3.5,
  * `webhook-subscription.json`) в HMAC-ключ доставки. Сам ключ в БД не хранится —
@@ -16,9 +18,24 @@ package bank.rdmmesh.api.port;
 public interface WebhookKeyPort {
 
     /**
-     * Возвращает ключ (≥32 байт) для подписи payload'а outbound webhook'а.
-     * Бросает {@link IllegalArgumentException} если secret_id неизвестен —
+     * Возвращает primary-ключ (≥32 байт) для <em>подписи</em> payload'а outbound
+     * webhook'а. Бросает {@link IllegalArgumentException} если secret_id неизвестен —
      * это считается мисконфигурацией subscription'а, а не транзиентной ошибкой доставки.
      */
     byte[] resolveKey(String secretId);
+
+    /**
+     * E14 round 6 — все ключи subscription'а (primary первым), валидные во время
+     * overlap-окна ротации. Outbound-доставка подписывает payload <em>один раз</em>
+     * primary-ключом на enqueue (см. {@code OutboxOutboundAdapter}); ротация на
+     * стороне RDM — это смена primary, а двух-ключевую verify-фазу держит consumer
+     * (E9 §3 #4). Метод предоставляется для симметрии с {@link SigningKeyPort} и
+     * на случай будущего inbound-verify outbound-подписей.
+     *
+     * <p>Default — backward-compatible single-key. {@code EnvWebhookKeyAdapter}
+     * переопределяет, добавляя {@code RDM_WEBHOOK_KEY_<ID>_PREVIOUS}.
+     */
+    default List<byte[]> resolveAllKeys(String secretId) {
+        return List.of(resolveKey(secretId));
+    }
 }

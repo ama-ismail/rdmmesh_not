@@ -3,6 +3,7 @@ package bank.rdmmesh.ownership.internal.webhook;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -64,8 +65,48 @@ class HmacVerifierTest {
         assertThat(verifier.verify(truncated, body)).isFalse();
     }
 
-    @SuppressWarnings("unused")
-    private static SigningKeyPort fixed(byte[] key) {
-        return () -> key.clone();
+    // ── E14 round 6: rotation (primary + previous overlap) ──────────────────────
+
+    private static final byte[] OLD_KEY =
+            "rdmmesh-OLD-rotation-key-at-least-32-bytes-long".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] NEW_KEY =
+            "rdmmesh-NEW-rotation-key-at-least-32-bytes-long".getBytes(StandardCharsets.UTF_8);
+
+    /** acceptedHmacKeys = [NEW (primary), OLD (previous)] — overlap-окно ротации. */
+    private final HmacVerifier rotating = new HmacVerifier(new SigningKeyPort() {
+        @Override public byte[] currentHmacKey() { return NEW_KEY.clone(); }
+        @Override public List<byte[]> acceptedHmacKeys() {
+            return List.of(NEW_KEY.clone(), OLD_KEY.clone());
+        }
+    });
+
+    @Test
+    void rotation_accepts_signature_under_new_primary_key() {
+        byte[] body = "{\"event_id\":\"evt-new\"}".getBytes(StandardCharsets.UTF_8);
+        assertThat(rotating.verify(HmacVerifier.sign(body, NEW_KEY), body)).isTrue();
+    }
+
+    @Test
+    void rotation_still_accepts_signature_under_previous_key_during_overlap() {
+        // OM ещё не переключился на новый секрет — подписывает старым ключом.
+        byte[] body = "{\"event_id\":\"evt-old\"}".getBytes(StandardCharsets.UTF_8);
+        assertThat(rotating.verify(HmacVerifier.sign(body, OLD_KEY), body)).isTrue();
+    }
+
+    @Test
+    void rotation_rejects_signature_under_unknown_key() {
+        byte[] body = "{\"event_id\":\"evt-bad\"}".getBytes(StandardCharsets.UTF_8);
+        byte[] strangerKey =
+                "rdmmesh-STRANGER-not-in-accepted-set-32-bytes".getBytes(StandardCharsets.UTF_8);
+        assertThat(rotating.verify(HmacVerifier.sign(body, strangerKey), body)).isFalse();
+    }
+
+    @Test
+    void default_single_key_port_still_works_after_round6() {
+        // Лямбда-порт (без override acceptedHmacKeys) — backward-compatible.
+        byte[] body = "legacy".getBytes(StandardCharsets.UTF_8);
+        HmacVerifier singleKey = new HmacVerifier(() -> KEY.clone());
+        assertThat(singleKey.verify(HmacVerifier.sign(body, KEY), body)).isTrue();
+        assertThat(singleKey.verify(HmacVerifier.sign(body, OLD_KEY), body)).isFalse();
     }
 }

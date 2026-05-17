@@ -16,6 +16,14 @@ import bank.rdmmesh.api.port.SigningKeyPort;
  * <p>Формат заголовка совпадает с GitHub-style ({@code sha256=<hex>}) — он же
  * настраивается в OM Event Subscription. Устойчив к timing-атакам через
  * {@link MessageDigest#isEqual(byte[], byte[])}.
+ *
+ * <p><b>Rotation (E14 round 6).</b> Подпись проверяется против <em>любого</em> из
+ * {@link SigningKeyPort#acceptedHmacKeys()} (primary + опциональный previous). Это
+ * даёт zero-downtime ротацию inbound-ключа OM webhook'а ({@code RDM_OM_WEBHOOK_HMAC_KEY}):
+ * пока OM Event Subscription не переключился на новый секрет, RDM продолжает
+ * принимать подписи под старым (previous) ключом. Все ключи перебираются без
+ * раннего выхода — какой именно ключ совпал, по таймингу не утекает (число ключей
+ * 1–2 и не секретно). Процедура — {@code docs/runbooks/hmac-key-rotation.md}.
  */
 public final class HmacVerifier {
 
@@ -42,8 +50,14 @@ public final class HmacVerifier {
         } catch (IllegalArgumentException ex) {
             return false;
         }
-        byte[] computed = compute(body, signingKey.currentHmacKey());
-        return MessageDigest.isEqual(presented, computed);
+        // E14 round 6: принимаем подпись под любым accepted-ключом (primary
+        // ИЛИ previous на время overlap-окна ротации). Перебор без раннего
+        // выхода: OR накапливаем, чтобы не утекал по таймингу индекс совпавшего ключа.
+        boolean ok = false;
+        for (byte[] key : signingKey.acceptedHmacKeys()) {
+            ok |= MessageDigest.isEqual(presented, compute(body, key));
+        }
+        return ok;
     }
 
     /** Полезно для тестов и для кросс-системной отладки. */

@@ -1,6 +1,8 @@
 package bank.rdmmesh.app.security;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 
@@ -29,6 +31,9 @@ public final class EnvWebhookKeyAdapter implements WebhookKeyPort {
 
     private static final String VAR_PREFIX = "RDM_WEBHOOK_KEY_";
     private static final String FALLBACK_VAR = VAR_PREFIX + "DEFAULT";
+
+    /** Суффикс overlap-ключа на время ротации (E14 round 6). */
+    public static final String PREVIOUS_SUFFIX = "_PREVIOUS";
 
     private final byte[] devFallback;
 
@@ -68,6 +73,37 @@ public final class EnvWebhookKeyAdapter implements WebhookKeyPort {
                 "no webhook key for secret_id=" + secretId
                         + " (env " + VAR_PREFIX + secretId.toUpperCase(Locale.ROOT)
                         + " not set, и нет dev fallback'а)");
+    }
+
+    /**
+     * E14 round 6 — primary + опциональный overlap-ключ для secret_id.
+     * Primary резолвится как в {@link #resolveKey(String)}; overlap-ключ ищется в
+     * {@code RDM_WEBHOOK_KEY_<UPPER(secretId)>_PREVIOUS}, а если его нет —
+     * в {@code RDM_WEBHOOK_KEY_DEFAULT_PREVIOUS}. Вне ротации список = {@code [primary]}.
+     *
+     * <p>Outbound подписывает payload primary-ключом на enqueue; этот метод —
+     * для симметрии с {@code SigningKeyPort.acceptedHmacKeys()} и потенциального
+     * inbound-verify (двух-ключевую verify-фазу на стороне consumer'а держит сам
+     * consumer — E9 §3 #4).
+     */
+    @Override
+    public List<byte[]> resolveAllKeys(String secretId) {
+        if (secretId == null || secretId.isBlank()) {
+            throw new IllegalArgumentException("secret_id не может быть пустым");
+        }
+        List<byte[]> out = new ArrayList<>(2);
+        out.add(resolveKey(secretId));
+
+        String upper = secretId.toUpperCase(Locale.ROOT);
+        String previous = System.getenv(VAR_PREFIX + upper + PREVIOUS_SUFFIX);
+        if (previous == null || previous.isBlank()) {
+            previous = System.getenv(FALLBACK_VAR + PREVIOUS_SUFFIX);
+        }
+        if (previous != null && !previous.isBlank()) {
+            out.add(ensureLength(
+                    previous.getBytes(StandardCharsets.UTF_8), secretId + PREVIOUS_SUFFIX));
+        }
+        return List.copyOf(out);
     }
 
     private static byte[] ensureLength(byte[] key, String label) {

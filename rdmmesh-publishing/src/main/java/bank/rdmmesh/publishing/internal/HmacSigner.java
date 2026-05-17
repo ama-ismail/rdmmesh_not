@@ -19,6 +19,17 @@ import bank.rdmmesh.api.port.SigningKeyPort;
  * Любой потребитель может перепроверить content_hash, перечитав canonical bytes;
  * для подписи нужен HMAC-ключ — её делаем server-side в verify-endpoint.
  *
+ * <p><b>Rotation (E14 round 6).</b> {@link #signApproval} всегда подписывает
+ * primary-ключом ({@code SigningKeyPort.currentHmacKey()}) — после ротации новые
+ * версии подписываются новым ключом, это корректно. Полная HMAC-перепроверка
+ * <em>исторических</em> {@code approval_signature} в verify-endpoint остаётся
+ * отложенной (handoff E6 §3 #3): подписанный ISO-timestamp в БД не сохраняется
+ * (колонка {@code published_at} = SQL {@code now()} ≠ подписанный
+ * {@code Instant.now()}), поэтому точную подписанную строку воспроизвести нельзя
+ * без изменения замороженной E6-формулы + миграции. Round 6 даёт rotation-примитив
+ * ({@code SigningKeyPort.acceptedHmacKeys()}), но потребитель этого примитива для
+ * E6-историч-verify включается отдельным follow-up'ом.
+ *
  * <p>Конкатенатор подписи использует {@code "|"}-разделители — байты detect-able
  * визуально, и модель явная: ни {@code content_hash}, ни UUID не содержат {@code |}.
  */
