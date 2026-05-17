@@ -102,6 +102,14 @@
             <artifactId>postgresql</artifactId>
         </dependency>
 
+        <!-- E14 round 10: RustFS/S3 adapter (ArchivePort impl) живёт в
+             composition-root'е — rdmmesh-audit не имеет права тянуть S3-клиент
+             (ArchUnit audit_only_depends_on_api_or_spec). -->
+        <dependency>
+            <groupId>io.minio</groupId>
+            <artifactId>minio</artifactId>
+        </dependency>
+
         <!-- ArchUnit lives here so isolation tests can scan the entire classpath at once -->
         <dependency>
             <groupId>com.tngtech.archunit</groupId>

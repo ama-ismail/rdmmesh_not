@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import bank.rdmmesh.api.eventbus.EventBus;
+import bank.rdmmesh.api.port.ArchivePort;
 import bank.rdmmesh.api.port.CatalogMirrorPort;
 import bank.rdmmesh.api.port.CatalogReadPort;
 import bank.rdmmesh.api.port.IdentityPort;
@@ -18,6 +19,7 @@ import bank.rdmmesh.api.port.VersionLifecyclePort;
 import bank.rdmmesh.api.port.WebhookKeyPort;
 import bank.rdmmesh.api.port.WorkflowJournalPort;
 import bank.rdmmesh.api.security.RdmmeshPrincipal;
+import bank.rdmmesh.app.archive.ArchiveAdapters;
 import bank.rdmmesh.app.auth.AuthResource;
 import bank.rdmmesh.app.eventbus.SyncEventBus;
 import bank.rdmmesh.app.health.InfoHealthCheck;
@@ -176,6 +178,15 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         // для UI-viewer'а (handoff E10 §3 #3).
         AuditModule.Resources audit = AuditModule.build(jdbi, eventBus, environment.getObjectMapper());
         environment.jersey().register(audit.resource());
+
+        // E14 round 10 — immutable audit-archive (RustFS/S3, SPEC §3.8 V2).
+        // ArchivePort disabled-by-default: пустой RDM_ARCHIVE_ENDPOINT →
+        // no-op stub, сервис без RustFS не падает. POST /api/v1/audit/archive
+        // (RDM_ADMIN) льёт месячный сегмент + пишет audit.archive_manifest —
+        // источник истины для drop_audit_partition_if_archived(text) (V074).
+        ArchivePort archivePort = ArchiveAdapters.fromEnv();
+        environment.jersey().register(
+                AuditModule.buildArchiveResource(jdbi, archivePort));
     }
 
     private static IdentityPort buildIdentityPort(Jdbi jdbi, RdmmeshConfiguration config) {

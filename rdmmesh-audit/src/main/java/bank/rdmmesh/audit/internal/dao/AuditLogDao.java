@@ -199,10 +199,15 @@ public interface AuditLogDao {
              WHERE id <= :snapshotMaxId
                AND (:eventType     IS NULL OR event_type     = :eventType)
                AND (:aggregateType IS NULL OR aggregate_type = :aggregateType)
-               AND (:aggregateId   IS NULL OR aggregate_id   = :aggregateId)
-               AND (:actor         IS NULL OR actor          = :actor)
-               AND (:fromTs        IS NULL OR occurred_at   >= :fromTs)
-               AND (:toTs          IS NULL OR occurred_at   <  :toTs)
+               -- CAST'ы: типизированный nullable-параметр, чей ПЕРВЫЙ
+               -- синтаксический инстанс — `:p IS NULL`, оставляет Postgres
+               -- без типа на parse → "could not determine data type"
+               -- (E14 round 10: findExportPage с непустыми fromTs/toTs;
+               -- E14.4-export не ловил — даты не передавались).
+               AND (CAST(:aggregateId AS uuid)        IS NULL OR aggregate_id = CAST(:aggregateId AS uuid))
+               AND (CAST(:actor       AS uuid)        IS NULL OR actor        = CAST(:actor AS uuid))
+               AND (CAST(:fromTs      AS timestamptz) IS NULL OR occurred_at >= CAST(:fromTs AS timestamptz))
+               AND (CAST(:toTs        AS timestamptz) IS NULL OR occurred_at <  CAST(:toTs AS timestamptz))
                AND (:freeText      IS NULL OR payload->>'comment' ILIKE :freeText)
              ORDER BY id ASC
              LIMIT :limit OFFSET :offset

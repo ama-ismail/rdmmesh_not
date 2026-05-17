@@ -47,6 +47,14 @@
         <jwks-rsa.version>0.22.1</jwks-rsa.version>
         <java-jwt.version>4.4.0</java-jwt.version>
         <archunit.version>1.3.0</archunit.version>
+        <!-- E14 round 10: S3-совместимый клиент для immutable audit-archive
+             (RustFS). minio-java — лёгкий single-client, object-lock/retention,
+             работает против любого S3-API (RustFS = drop-in MinIO-замена). -->
+        <minio.version>8.5.11</minio.version>
+        <!-- minio→okhttp 4.12.0 тянет kotlin-stdlib(-jdk8) в двух версиях
+             (okio-jvm→1.9.10 vs okhttp→1.8.21) → enforcer DependencyConvergence.
+             Пинуем обе на 1.9.10 (старшая) — стандартный remedy. -->
+        <kotlin.version>1.9.10</kotlin.version>
 
         <!-- Test versions -->
         <junit-jupiter.version>5.11.4</junit-jupiter.version>
@@ -130,6 +138,24 @@
                 <groupId>com.github.ben-manes.caffeine</groupId>
                 <artifactId>caffeine</artifactId>
                 <version>${caffeine.version}</version>
+            </dependency>
+
+            <!-- E14 round 10: S3-совместимый клиент (RustFS immutable archive) -->
+            <dependency>
+                <groupId>io.minio</groupId>
+                <artifactId>minio</artifactId>
+                <version>${minio.version}</version>
+            </dependency>
+            <!-- Convergence-pin для транзитива minio→okhttp/okio (см. property). -->
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-stdlib</artifactId>
+                <version>${kotlin.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-stdlib-jdk8</artifactId>
+                <version>${kotlin.version}</version>
             </dependency>
 
             <!-- ArchUnit (test-only) -->
