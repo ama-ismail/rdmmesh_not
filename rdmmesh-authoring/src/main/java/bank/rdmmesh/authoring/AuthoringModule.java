@@ -3,6 +3,7 @@ package bank.rdmmesh.authoring;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jdbi.v3.core.Jdbi;
 
+import bank.rdmmesh.api.eventbus.EventBus;
 import bank.rdmmesh.api.port.CatalogReadPort;
 import bank.rdmmesh.api.port.PublishedSnapshotPort;
 import bank.rdmmesh.api.port.VersionLifecyclePort;
@@ -25,14 +26,15 @@ public final class AuthoringModule {
 
     private AuthoringModule() {}
 
-    public static Resources build(Jdbi jdbi, CatalogReadPort catalog, ObjectMapper json) {
+    public static Resources build(
+            Jdbi jdbi, CatalogReadPort catalog, ObjectMapper json, EventBus eventBus) {
         AuthoringService service = new AuthoringService(jdbi, catalog, json);
         return new Resources(
                 service,
                 new CodeSetVersionResource(service),
                 new CodeItemResource(service),
                 new VersionDiffResource(service),
-                new ClosureAdminResource(service));
+                new ClosureAdminResource(service, eventBus));
     }
 
     /** Read+CAS-write порт authoring'а для модулей workflow / publishing. */

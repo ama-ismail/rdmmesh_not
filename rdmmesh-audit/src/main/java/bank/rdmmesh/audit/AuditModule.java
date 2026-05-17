@@ -31,7 +31,7 @@ public final class AuditModule {
         // REST-needs и не давать byte-stable сериализацию).
         AuditChainHasher hasher = new AuditChainHasher(AuditChainHasher.defaultMapper());
         AuditChainVerifier verifier = new AuditChainVerifier(hasher);
-        AuditResource resource = new AuditResource(jdbi, json, verifier);
+        AuditResource resource = new AuditResource(jdbi, json, verifier, eventBus);
         return new Resources(service, resource);
     }
 

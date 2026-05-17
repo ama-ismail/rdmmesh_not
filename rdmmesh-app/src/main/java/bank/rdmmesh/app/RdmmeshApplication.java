@@ -87,6 +87,11 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         log.info("JDBI initialised against {} (SqlObjectPlugin + PostgresPlugin installed)",
                 config.getDatabase().getUrl());
 
+        // E14 round 8: глобальный лимит размера тела (@PreMatching, до auth и
+        // чтения entity). Защищает неаутентифицированный OM-webhook от
+        // memory-exhaustion (см. RequestSizeLimitFilter javadoc).
+        environment.jersey().register(new bank.rdmmesh.app.security.RequestSizeLimitFilter());
+
         IdentityPort identityPort = buildIdentityPort(jdbi, config);
         registerJwtAuth(environment, identityPort);
 
@@ -98,8 +103,12 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         environment.jersey().register(catalog.schemas());
 
         CatalogReadPort catalogReadPort = CatalogModule.buildReadPort(jdbi);
+        // EventBus создаётся раньше: E14 round 11 — ClosureAdminResource
+        // (authoring) эмитит ClosureRebuildDomainEvent, поэтому шина нужна
+        // уже на этапе AuthoringModule.build.
+        EventBus eventBus = new SyncEventBus();
         AuthoringModule.Resources authoring = AuthoringModule.build(
-                jdbi, catalogReadPort, environment.getObjectMapper());
+                jdbi, catalogReadPort, environment.getObjectMapper(), eventBus);
         environment.jersey().register(authoring.versions());
         environment.jersey().register(authoring.items());
         environment.jersey().register(authoring.diff());
@@ -108,7 +117,6 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         // E5 — Workflow. Lifecycle-write идёт через authoring (SPEC §3.3),
         // catalog read нужен workflow для resolve domainId по codesetId.
         VersionLifecyclePort lifecycle = AuthoringModule.buildLifecyclePort(jdbi);
-        EventBus eventBus = new SyncEventBus();
         WorkflowModule.Resources workflow = WorkflowModule.build(
                 jdbi, lifecycle, ownershipPort, catalogReadPort, eventBus);
         environment.jersey().register(workflow.transitions());

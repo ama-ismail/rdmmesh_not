@@ -28,12 +28,16 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.StreamingOutput;
 
+import bank.rdmmesh.api.eventbus.AuditVerifyDomainEvent;
+import bank.rdmmesh.api.eventbus.EventBus;
 import bank.rdmmesh.api.security.RdmmeshPrincipal;
 import bank.rdmmesh.audit.internal.AuditChainVerifier;
 import bank.rdmmesh.audit.internal.AuditExportWriter;
 import bank.rdmmesh.audit.internal.dao.AuditLogDao;
 import io.dropwizard.auth.Auth;
 import org.jdbi.v3.core.Jdbi;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Эпик E11.2d (UI Audit viewer) — закрывает follow-up handoff E10 §3 #3.
@@ -83,14 +87,19 @@ public final class AuditResource {
     private static final DateTimeFormatter FILENAME_TIMESTAMP =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
 
+    private static final Logger log = LoggerFactory.getLogger(AuditResource.class);
+
     private final Jdbi jdbi;
     private final ObjectMapper json;
     private final AuditChainVerifier verifier;
+    private final EventBus eventBus;
 
-    public AuditResource(Jdbi jdbi, ObjectMapper json, AuditChainVerifier verifier) {
+    public AuditResource(
+            Jdbi jdbi, ObjectMapper json, AuditChainVerifier verifier, EventBus eventBus) {
         this.jdbi = jdbi;
         this.json = json;
         this.verifier = verifier;
+        this.eventBus = eventBus;
     }
 
     @GET
@@ -256,6 +265,24 @@ public final class AuditResource {
                 dao -> dao.findChainRange(from, to));
 
         AuditChainVerifier.Result r = verifier.verify(rows, anchorPrev);
+
+        // E14 round 11 — event-coverage: фиксируем сам факт verify-chain
+        // (кто/диапазон/исход) в журнале. Подписчик audit запишет это новой
+        // append-row'й (id > to) — на уже-вычисленный r не влияет, цикла нет
+        // (verify-chain — GET по запросу, не триггерится записью). Publish
+        // best-effort: сбой не должен ломать ответ verify-chain (SPEC §3.8).
+        try {
+            eventBus.publish(new AuditVerifyDomainEvent(
+                    UUID.randomUUID(),
+                    OffsetDateTime.now(ZoneOffset.UTC),
+                    principal.omUserId(),
+                    from,
+                    to,
+                    r.verified(),
+                    r.checked()));
+        } catch (RuntimeException e) {
+            log.warn("audit: AUDIT_VERIFY_CHAIN event publish failed: {}", e.toString());
+        }
 
         return new VerifyChainResponse(
                 from,

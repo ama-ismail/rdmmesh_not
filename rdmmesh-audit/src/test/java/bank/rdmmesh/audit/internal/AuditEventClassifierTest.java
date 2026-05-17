@@ -5,6 +5,8 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 
+import bank.rdmmesh.api.eventbus.AuditVerifyDomainEvent;
+import bank.rdmmesh.api.eventbus.ClosureRebuildDomainEvent;
 import bank.rdmmesh.api.eventbus.DomainEvent;
 import bank.rdmmesh.api.eventbus.OwnershipChangedDomainEvent;
 import bank.rdmmesh.api.eventbus.VersionPublishedDomainEvent;
@@ -108,6 +110,35 @@ final class AuditEventClassifierTest {
         assertThat(c.aggregateType()).isEqualTo("CODESET");
         assertThat(c.aggregateId()).isEqualTo(codesetId);
         assertThat(c.actor()).isNull();
+    }
+
+    @Test
+    void audit_verify_chain_classified_with_actor_and_audit_aggregate() {
+        UUID actor = UUID.randomUUID();
+        DomainEvent evt = new AuditVerifyDomainEvent(
+                UUID.randomUUID(), OffsetDateTime.now(), actor, 1L, 42L, true, 41);
+
+        var c = AuditEventClassifier.classify(evt);
+
+        assertThat(c.eventType()).isEqualTo("AUDIT_VERIFY_CHAIN");
+        assertThat(c.aggregateType()).isEqualTo("AUDIT");
+        assertThat(c.aggregateId()).isNull(); // range, не один asset
+        assertThat(c.actor()).isEqualTo(actor);
+    }
+
+    @Test
+    void closure_rebuild_classified_with_version_aggregate_and_admin_actor() {
+        UUID versionId = UUID.randomUUID();
+        UUID admin = UUID.randomUUID();
+        DomainEvent evt = new ClosureRebuildDomainEvent(
+                UUID.randomUUID(), OffsetDateTime.now(), admin, versionId, 5, 5, 12);
+
+        var c = AuditEventClassifier.classify(evt);
+
+        assertThat(c.eventType()).isEqualTo("CLOSURE_REBUILD");
+        assertThat(c.aggregateType()).isEqualTo("VERSION");
+        assertThat(c.aggregateId()).isEqualTo(versionId);
+        assertThat(c.actor()).isEqualTo(admin);
     }
 
     @Test

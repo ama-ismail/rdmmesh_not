@@ -2,6 +2,8 @@ package bank.rdmmesh.audit.internal;
 
 import java.util.UUID;
 
+import bank.rdmmesh.api.eventbus.AuditVerifyDomainEvent;
+import bank.rdmmesh.api.eventbus.ClosureRebuildDomainEvent;
 import bank.rdmmesh.api.eventbus.DomainEvent;
 import bank.rdmmesh.api.eventbus.OwnershipChangedDomainEvent;
 import bank.rdmmesh.api.eventbus.VersionPublishedDomainEvent;
@@ -33,6 +35,14 @@ public final class AuditEventClassifier {
         }
         if (event instanceof OwnershipChangedDomainEvent o) {
             return classifyOwnership(o);
+        }
+        if (event instanceof AuditVerifyDomainEvent a) {
+            // aggregate = весь журнал (range), не один asset → aggregateId=null.
+            return new Classification("AUDIT_VERIFY_CHAIN", "AUDIT", null, a.actor());
+        }
+        if (event instanceof ClosureRebuildDomainEvent cr) {
+            return new Classification(
+                    "CLOSURE_REBUILD", "VERSION", cr.versionId(), cr.actor());
         }
         return new Classification(
                 event.getClass().getSimpleName(), null, null, null);
