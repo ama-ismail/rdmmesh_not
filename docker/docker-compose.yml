@@ -58,7 +58,9 @@ services:
   # S3-совместимый (drop-in MinIO-замена), без AGPL/платных ограничений.
   # S3 API :9000, web-консоль :9001, контейнер под uid 10001.
   rustfs:
-    image: rustfs/rustfs:latest
+    # E14 round 13: запинен конкретный тег (был :latest — невоспроизводимо).
+    # Override: RDM_RUSTFS_IMAGE. Бамп тега — осознанно, после регресс-smoke.
+    image: ${RDM_RUSTFS_IMAGE:-rustfs/rustfs:1.0.0-beta.3}
     container_name: rdmmesh-rustfs
     environment:
       # Дефолтные root-креды RustFS (dev). В prod — из Vault, не в compose.
@@ -111,6 +113,11 @@ services:
       RDM_ARCHIVE_ACCESS_KEY: ${RDM_ARCHIVE_ACCESS_KEY:-rustfsadmin}
       RDM_ARCHIVE_SECRET_KEY: ${RDM_ARCHIVE_SECRET_KEY:-rustfsadmin}
       RDM_ARCHIVE_REGION:     ${RDM_ARCHIVE_REGION:-us-east-1}
+      # E14 round 13 (Q62): Object-Lock режим. GOVERNANCE (default) —
+      # admin с bypass-правом может снять retention; COMPLIANCE —
+      # необратимо до retain-until даже для root (regulator-mandated
+      # IFRS9). Менять на COMPLIANCE по решению compliance банка.
+      RDM_ARCHIVE_LOCK_MODE:  ${RDM_ARCHIVE_LOCK_MODE:-GOVERNANCE}
     ports:
       - "${RDM_HTTP_PORT:-8080}:8080"
       - "${RDM_ADMIN_PORT:-8081}:8081"

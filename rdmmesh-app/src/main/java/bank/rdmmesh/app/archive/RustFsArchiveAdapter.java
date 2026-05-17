@@ -39,11 +39,18 @@ public final class RustFsArchiveAdapter implements ArchivePort {
 
     private final MinioClient client;
     private final String bucket;
+    private final RetentionMode lockMode;
     private volatile boolean bucketReady = false;
 
     public RustFsArchiveAdapter(
-            String endpoint, String accessKey, String secretKey, String region, String bucket) {
+            String endpoint,
+            String accessKey,
+            String secretKey,
+            String region,
+            String bucket,
+            RetentionMode lockMode) {
         this.bucket = bucket;
+        this.lockMode = lockMode;
         this.client = MinioClient.builder()
                 .endpoint(endpoint)
                 .credentials(accessKey, secretKey)
@@ -94,7 +101,7 @@ public final class RustFsArchiveAdapter implements ArchivePort {
                         .bucket(bucket)
                         .object(objectKey)
                         .config(new Retention(
-                                RetentionMode.GOVERNANCE,
+                                lockMode,
                                 ZonedDateTime.parse(retainUntil.toString())))
                         .bypassGovernanceMode(false)
                         .build());

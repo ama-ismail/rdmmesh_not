@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import bank.rdmmesh.api.port.ArchivePort;
+import io.minio.messages.RetentionMode;
 
 /**
  * Фабрика {@link ArchivePort} из окружения (паттерн {@code EnvSigningKeyAdapter}).
@@ -30,8 +31,30 @@ public final class ArchiveAdapters {
         String ak = orDefault(System.getenv("RDM_ARCHIVE_ACCESS_KEY"), "rustfsadmin");
         String sk = orDefault(System.getenv("RDM_ARCHIVE_SECRET_KEY"), "rustfsadmin");
         String region = orDefault(System.getenv("RDM_ARCHIVE_REGION"), "us-east-1");
-        log.info("archive: ArchivePort enabled — endpoint={} bucket={}", endpoint, bucket);
-        return new RustFsArchiveAdapter(endpoint, ak, sk, region, bucket);
+        RetentionMode lockMode = parseLockMode(System.getenv("RDM_ARCHIVE_LOCK_MODE"));
+        log.info("archive: ArchivePort enabled — endpoint={} bucket={} lockMode={}",
+                endpoint, bucket, lockMode);
+        return new RustFsArchiveAdapter(endpoint, ak, sk, region, bucket, lockMode);
+    }
+
+    /**
+     * Q62 (E14 round 13): GOVERNANCE (default — admin с bypass снимает
+     * retention) vs COMPLIANCE (необратимо до retain-until, regulator-mandated).
+     * Невалидное значение → GOVERNANCE + error-лог (не «фейлим» архивацию,
+     * но и не молча включаем более слабый/сильный режим без следа).
+     */
+    private static RetentionMode parseLockMode(String raw) {
+        String v = trim(raw);
+        if (v == null) {
+            return RetentionMode.GOVERNANCE;
+        }
+        try {
+            return RetentionMode.valueOf(v.toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            log.error("archive: невалидный RDM_ARCHIVE_LOCK_MODE='{}' — fallback GOVERNANCE "
+                    + "(допустимо: GOVERNANCE|COMPLIANCE)", v);
+            return RetentionMode.GOVERNANCE;
+        }
     }
 
     /** No-op: {@link ArchivePort#enabled()} = false, put/exists бросают ISE. */

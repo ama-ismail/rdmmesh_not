@@ -48,20 +48,24 @@ SELECT count(*) FROM audit.audit_log_default;   -- ожидание: 0
 
 ## 3. Retention-дроп (за пределами 7/10 лет, после архива)
 
-1. Заархивировать партицию в immutable S3 (round 10) — снапшот ОБЯЗАН включать
-   `prev_hash`/`entry_hash` (`pg_dump`/`COPY` колонок), иначе verify-после-restore
-   невозможен.
-2. Дропнуть только через guarded-функцию:
+1. Заархивировать партицию в immutable RustFS/S3 (round 10) — через
+   backend `POST /api/v1/audit/archive` + `verify`. Сериализация включает
+   `prev_hash`/`entry_hash` (ndjson через `AuditExportWriter`), факт
+   фиксируется в `audit.archive_manifest`. Полный поток —
+   [`audit-archive.md`](audit-archive.md).
+2. Дропнуть через **1-арг** guarded-функцию (V074, round 10): archived
+   выводится из манифеста — honor-system устранён, оператор НЕ передаёт
+   `true` руками:
 
 ```sql
-SELECT audit.drop_audit_partition_if_archived(
-       'audit_log_y2016m01',           -- имя партиции
-       true,                           -- архив подтверждён
-       interval '10 years');           -- retention (по умолч. 10 лет)
+SELECT audit.drop_audit_partition_if_archived('audit_log_y2016m01');
 ```
 
-Функция откажет (`insufficient_privilege`), если `p_archived=false` либо граница
-внутри retention. После дропа: глобальный verify даст разрыв на стыке с
+`assert_segment_archived` откажет, если сегмента нет в
+`audit.archive_manifest`; делегирует в замороженную V073 3-арг функцию,
+которая откажет (`insufficient_privilege`), если граница внутри
+retention. Старый 3-арг вызов остаётся как низкоуровневый primitive, но
+**штатно используется 1-арг** (не доверяет аргументу-флагу). После дропа: глобальный verify даст разрыв на стыке с
 дропнутым сегментом — это **ожидаемо**; полная проверка делается по
 архиву + живому хвосту.
 
