@@ -8,6 +8,8 @@ import java.util.UUID;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jdbi.v3.core.Jdbi;
 
+import bank.rdmmesh.publishing.internal.egress.EgressBlockedException;
+import bank.rdmmesh.publishing.internal.egress.EgressPolicy;
 import bank.rdmmesh.publishing.internal.outbound.dao.SubscriptionDao;
 import bank.rdmmesh.publishing.internal.outbound.dao.SubscriptionDao.SubscriptionRow;
 
@@ -19,10 +21,12 @@ public final class SubscriptionService {
 
     private final Jdbi jdbi;
     private final ObjectMapper json;
+    private final EgressPolicy egress;
 
-    public SubscriptionService(Jdbi jdbi, ObjectMapper json) {
+    public SubscriptionService(Jdbi jdbi, ObjectMapper json, EgressPolicy egress) {
         this.jdbi = jdbi;
         this.json = json;
+        this.egress = egress;
     }
 
     public List<SubscriptionRow> list() {
@@ -51,6 +55,14 @@ public final class SubscriptionService {
             }
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("url is not a valid URI: " + url, e);
+        }
+        // F4 SSRF-guard (E14 round 12): best-effort на регистрации — быстрый
+        // отказ, если host резолвится в запрещённый адрес. Авторитетная
+        // (DNS-rebinding-safe) проверка — на доставке в WebhookDeliveryWorker.
+        try {
+            egress.checkAtRegistration(java.net.URI.create(url).getHost());
+        } catch (EgressBlockedException blocked) {
+            throw new IllegalArgumentException(blocked.getMessage(), blocked);
         }
         if (secretId == null || secretId.isBlank()) {
             throw new IllegalArgumentException("secret_id is required");

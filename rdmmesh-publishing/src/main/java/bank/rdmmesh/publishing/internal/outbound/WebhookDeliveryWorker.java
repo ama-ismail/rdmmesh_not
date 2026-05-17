@@ -16,6 +16,8 @@ import org.jdbi.v3.core.Jdbi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import bank.rdmmesh.publishing.internal.egress.EgressBlockedException;
+import bank.rdmmesh.publishing.internal.egress.EgressPolicy;
 import bank.rdmmesh.publishing.internal.outbound.dao.SubscriptionDao;
 import bank.rdmmesh.publishing.internal.outbound.dao.SubscriptionDao.SubscriptionRow;
 import bank.rdmmesh.publishing.internal.outbound.dao.WebhookOutboxDao;
@@ -59,10 +61,12 @@ public final class WebhookDeliveryWorker implements Managed {
     private final ScheduledExecutorService executor;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final long tickSeconds;
+    private final EgressPolicy egress;
 
-    public WebhookDeliveryWorker(Jdbi jdbi, long tickSeconds) {
+    public WebhookDeliveryWorker(Jdbi jdbi, long tickSeconds, EgressPolicy egress) {
         this.jdbi = jdbi;
         this.tickSeconds = tickSeconds;
+        this.egress = egress;
         this.http = HttpClient.newBuilder()
                 .connectTimeout(CONNECT_TIMEOUT)
                 .followRedirects(HttpClient.Redirect.NEVER)
@@ -146,6 +150,20 @@ public final class WebhookDeliveryWorker implements Managed {
         } catch (IllegalArgumentException e) {
             outbox.markGivenUp(row.id(), Instant.now(),
                     "GIVE_UP: invalid url: " + s.url());
+            return;
+        }
+
+        // F4 SSRF-guard (E14 round 12): авторитетная DNS-rebinding-safe
+        // проверка — резолв host'а здесь, прямо перед connect. Блок =
+        // GIVE_UP без retry: повтор на тот же запрещённый адрес бессмыслен.
+        try {
+            egress.check(uri.getHost());
+        } catch (EgressBlockedException blocked) {
+            outbox.markGivenUp(row.id(), Instant.now(),
+                    "GIVE_UP: " + blocked.getMessage());
+            subs.markDelivery(s.id(), Instant.now(), "FAILED");
+            log.warn("webhook-delivery: SSRF-BLOCKED subscription={} event={}: {}",
+                    s.id(), row.eventId(), blocked.getMessage());
             return;
         }
 

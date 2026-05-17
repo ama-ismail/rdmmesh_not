@@ -13,6 +13,7 @@ import bank.rdmmesh.api.port.WebhookKeyPort;
 import bank.rdmmesh.api.port.WorkflowJournalPort;
 import bank.rdmmesh.publishing.internal.HmacSigner;
 import bank.rdmmesh.publishing.internal.PublishingService;
+import bank.rdmmesh.publishing.internal.egress.EgressPolicy;
 import bank.rdmmesh.publishing.internal.outbound.OutboxOutboundAdapter;
 import bank.rdmmesh.publishing.internal.outbound.SubscriptionService;
 import bank.rdmmesh.publishing.internal.outbound.WebhookDeliveryWorker;
@@ -61,8 +62,13 @@ public final class PublishingModule {
         PublishingService service = new PublishingService(
                 jdbi, lifecycle, snapshots, catalog, journal, signer, outbound, eventBus);
         service.registerOn(eventBus);
-        SubscriptionService subscriptions = new SubscriptionService(jdbi, json);
-        WebhookDeliveryWorker worker = new WebhookDeliveryWorker(jdbi, deliveryTickSeconds);
+        // F4 SSRF-guard (E14 round 12): safe-by-default egress-политика
+        // (loopback/link-local/metadata всегда deny; приватные сети — только
+        // если в RDM_WEBHOOK_EGRESS_PRIVATE_ALLOWLIST, пусто по умолчанию).
+        EgressPolicy egress = EgressPolicy.fromEnv();
+        SubscriptionService subscriptions = new SubscriptionService(jdbi, json, egress);
+        WebhookDeliveryWorker worker =
+                new WebhookDeliveryWorker(jdbi, deliveryTickSeconds, egress);
         return new Resources(
                 service,
                 outbound,
