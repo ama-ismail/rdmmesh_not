@@ -173,11 +173,11 @@
     "rejectedTitle": "Импорт отклонён — payload не прошёл валидацию",
     "applied": "Применено: +{{added}} / *{{updated}} / ={{unchanged}}",
     "jsonHint": "Массив объектов NewItem (key_parts обязателен). Атрибуты валидируются по активной CodeSetSchema.",
-    "csvHint": "CSV с заголовком. Колонки: key_parts, label_ru, label_en, attributes (JSON-строкой), order_index, status, effective_from, effective_to.",
+    "csvHint": "CSV с заголовком. Обязательна колонка key_parts; опционально label_ru, label_en, attributes (JSON-строкой), parent_key, order_index, status, effective_from, effective_to. Полные правила — docs/import-spravochnikov.md.",
     "dropJson": "Перетащите .json файл сюда или кликните",
     "dropCsv": "Перетащите .csv файл сюда или кликните",
     "dropXlsx": "Перетащите .xlsx файл сюда или кликните",
-    "xlsxHint": "Excel-книга (.xlsx). Первый лист, первая строка — заголовок. Колонки те же, что у CSV: key_parts, label_ru, label_en, attributes (JSON-строкой), order_index, status, effective_from, effective_to.",
+    "xlsxHint": "Excel-книга (.xlsx). Строка-заголовок, дальше данные; берётся первый лист, где есть колонка key_parts (имена колонок — без учёта регистра). Обязательна только key_parts. Полные правила — docs/import-spravochnikov.md.",
     "xlsxSelected": "Выбран файл: {{name}}",
     "xlsxNoFile": "Выберите .xlsx файл",
     "orPaste": "Или вставьте данные ниже:"

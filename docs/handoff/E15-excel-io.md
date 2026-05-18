@@ -138,7 +138,8 @@ SMOKE E15 OK
 > published (E4 §1 «создать DRAFT из последней published»): 3 ключа уже есть,
 > bulk-xlsx делает UPSERT. Это корректное поведение, не баг.
 
-**Пере-прогон скрипта** требует `TRUNCATE identity.rdm_user_mapping` (см. §5 #3).
+**Пере-прогон скрипта** больше не требует ручного `TRUNCATE
+identity.rdm_user_mapping` — баг lazy-mapping исправлен (см. §5 #3).
 
 ---
 
@@ -162,17 +163,19 @@ SMOKE E15 OK
    Сейчас лимита нет — fastexcel-reader стримит, но стоит ввести `maxRequestSize`
    на endpoint'е (Jetty/Dropwizard) перед prod. Согласовать с эксплуатацией.
 2. Нужен ли отдельный «шаблон .xlsx для скачивания» (header + пример) в UI (E11)?
-3. **Обнаружен pre-existing баг вне scope Excel I/O** (identity, не трогал —
-   фиксить отдельной задачей): ленивый upsert `identity.rdm_user_mapping`
-   при первом логине — это `INSERT` без `ON CONFLICT`, нарушает
-   `rdm_user_mapping_username_key` при повторном логине того же username
-   (другой Keycloak `sub` после пересборки KC при сохранённом Postgres-volume,
-   либо просто второй логин). Симптом: `POST /api/v1/domains` → 500
-   `duplicate key … rdm_user_mapping_username_key`. Workaround для
-   dev/smoke: `docker compose exec postgres psql -U rdmmesh_admin -d rdmmesh
-   -c 'TRUNCATE identity.rdm_user_mapping CASCADE;'` (или `down -v`). Чинить —
-   `ON CONFLICT (username) DO UPDATE` в lazy-mapping вставке (SPEC §2.4
-   «заполняется лениво при первом логине»).
+3. ~~Обнаружен pre-existing баг вне scope Excel I/O~~ → **ИСПРАВЛЕН
+   2026-05-18** (отдельно от E15, по запросу пользователя). Был: ленивый
+   upsert `identity.rdm_user_mapping` конфликтовал по `keycloak_sub`; при
+   новом `sub` с тем же `username` (пересборка Keycloak / сброс OM / 2-й
+   логин) INSERT нарушал `unique(username)` → HTTP 500
+   (`duplicate key rdm_user_mapping_username_key`) на первом запросе.
+   Фикс: `UserMappingDao.upsert` → `ON CONFLICT (username) DO UPDATE SET
+   om_user_id=EXCLUDED, keycloak_sub=EXCLUDED, …` — reconciliation по
+   стабильному натуральному ключу `username` (SPEC §2.4 разрешает
+   обновлять `om_user_id`; внешних FK на PK нет). Только SQL в DAO,
+   миграция не нужна. Проверено live (stale-строка → `GET /domains` под
+   dev-author → 200, строка реконсилилась). Workaround `TRUNCATE
+   identity.rdm_user_mapping` больше не нужен.
 
 ---
 

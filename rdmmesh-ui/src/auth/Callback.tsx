@@ -15,19 +15,63 @@ function handleCallbackOnce(): Promise<unknown> {
   return callbackOnce;
 }
 
+// Одноразовое самовосстановление: если код невалиден/просрочен (stale
+// PKCE-state после logout→login «сменить пользователя»), вместо тупикового
+// экрана ошибки чистим state и стартуем свежий signinRedirect РОВНО один
+// раз. Флаг в sessionStorage переживает редирект на Keycloak и обратно и не
+// даёт зациклиться, если сломано фундаментально.
+const RETRY_KEY = "rdm_oidc_recovering";
+
 export function Callback() {
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    handleCallbackOnce()
-      .then(() => {
-        if (!cancelled) navigate("/", { replace: true });
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
+
+    const finishHome = () => {
+      sessionStorage.removeItem(RETRY_KEY);
+      if (!cancelled) navigate("/", { replace: true });
+    };
+
+    const run = async () => {
+      const params = new URLSearchParams(window.location.search);
+      // Нет ?code — это не настоящий auth-callback (рефреш, возврат после
+      // logout и т.п.). Не дёргаем обмен, уходим домой: ProtectedRoute сам
+      // решит, нужен ли вход.
+      if (!params.has("code")) {
+        finishHome();
+        return;
+      }
+      // Код уже обменян ранее (двойной маунт / повторный заход на URL) и
+      // валидный пользователь уже есть — повторно не обмениваем.
+      const existing = await userManager.getUser();
+      if (existing && !existing.expired) {
+        finishHome();
+        return;
+      }
+      await handleCallbackOnce();
+      finishHome();
+    };
+
+    run().catch((e: unknown) => {
+      if (cancelled) return;
+      const recovering = sessionStorage.getItem(RETRY_KEY) === "1";
+      if (!recovering) {
+        // Первая неудача (обычно «Code not valid» из-за stale PKCE-state):
+        // чистим и логинимся заново — ровно одна попытка.
+        sessionStorage.setItem(RETRY_KEY, "1");
+        callbackOnce = null;
+        void userManager
+          .clearStaleState()
+          .finally(() => void userManager.signinRedirect());
+        return;
+      }
+      // Повторная неудача — терминальная ошибка (без зацикливания).
+      sessionStorage.removeItem(RETRY_KEY);
+      setError(e instanceof Error ? e.message : String(e));
+    });
+
     return () => {
       cancelled = true;
     };

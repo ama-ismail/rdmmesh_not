@@ -64,7 +64,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           ? String((user!.profile as Record<string, unknown>).preferred_username)
           : null,
       login: () => userManager.signinRedirect(),
-      logout: () => userManager.signoutRedirect(),
+      // Перед end-session ОБЯЗАТЕЛЬНО снимаем локального юзера и чистим
+      // stale signin-state. Иначе при «сменить пользователя» остаётся
+      // мусорный oidc.<state> с чужим PKCE code_verifier, и обмен кода
+      // следующего логина падает в Keycloak с invalid_grant
+      // («Code not valid»). signoutRedirectCallback на post-logout мы не
+      // обрабатываем (post_logout → "/"), поэтому чистим здесь явно.
+      logout: async () => {
+        await userManager.removeUser();
+        await userManager.clearStaleState();
+        await userManager.signoutRedirect();
+      },
     };
   }, [ready, user]);
 

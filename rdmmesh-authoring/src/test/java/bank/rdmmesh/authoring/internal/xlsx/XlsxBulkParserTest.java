@@ -87,10 +87,71 @@ class XlsxBulkParserTest {
                 .hasMessageContaining("key_parts");
     }
 
+    @Test
+    void matches_header_case_insensitively_and_strips_nbsp_bom() throws IOException {
+        // "Key_Parts" другой регистр; в label_ru — NBSP и BOM вокруг имени.
+        byte[] xlsx = workbook(sheet -> {
+            header(sheet, "Key_Parts", "\uFEFFlabel_ru\u00A0");
+            row(sheet, 1, "KZ", "Казахстан");
+        });
+        List<CsvBulkParser.Row> rows = parser.parse(in(xlsx));
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).keyParts()).containsExactly("KZ");
+        assertThat(rows.get(0).labelRu()).isEqualTo("Казахстан");
+    }
+
+    @Test
+    void picks_data_sheet_even_if_not_first() throws IOException {
+        byte[] xlsx = multiSheet(
+                sheet("Инструкция", s -> {
+                    s.value(0, 0, "Как заполнять");
+                    s.value(1, 0, "ля-ля");
+                }),
+                sheet("data", s -> {
+                    s.value(0, 0, "key_parts");
+                    s.value(0, 1, "label_ru");
+                    s.value(1, 0, "S1");
+                    s.value(1, 1, "Стадия 1");
+                }));
+        List<CsvBulkParser.Row> rows = parser.parse(in(xlsx));
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).keyParts()).containsExactly("S1");
+    }
+
+    @Test
+    void no_key_parts_anywhere_throws_actionable_error_listing_sheets() throws IOException {
+        byte[] xlsx = workbook(sheet -> {
+            header(sheet, "Код", "Наименование");
+            row(sheet, 1, "X", "Икс");
+        });
+        assertThatThrownBy(() -> parser.parse(in(xlsx)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("key_parts")
+                .hasMessageContaining("items") // имя листа
+                .hasMessageContaining("Код"); // фактически найденные заголовки
+    }
+
     // ── fastexcel-writer helpers ────────────────────────────────────────────────
 
     private interface SheetFiller {
         void fill(Worksheet sheet);
+    }
+
+    private record NamedSheet(String name, SheetFiller filler) {}
+
+    private static NamedSheet sheet(String name, SheetFiller filler) {
+        return new NamedSheet(name, filler);
+    }
+
+    private static byte[] multiSheet(NamedSheet... defs) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (Workbook wb = new Workbook(bos, "rdmmesh-test", "1.0")) {
+            for (NamedSheet d : defs) {
+                Worksheet ws = wb.newWorksheet(d.name());
+                d.filler().fill(ws);
+            }
+        }
+        return bos.toByteArray();
     }
 
     private static byte[] workbook(SheetFiller filler) throws IOException {
