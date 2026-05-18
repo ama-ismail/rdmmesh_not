@@ -140,4 +140,17 @@ public abstract class PostgresIT {
     protected static Connection adminConnection() throws SQLException {
         return DriverManager.getConnection(PG.getJdbcUrl(), ADMIN_USER, ADMIN_PASS);
     }
+
+    /** JDBC-координаты под rdmmesh_app — для движков с собственным пулом (Flowable). */
+    protected static String appJdbcUrl() {
+        return PG.getJdbcUrl();
+    }
+
+    protected static String appUser() {
+        return APP_USER;
+    }
+
+    protected static String appPassword() {
+        return APP_PASS;
+    }
 }

@@ -133,10 +133,26 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         // E5 — Workflow. Lifecycle-write идёт через authoring (SPEC §3.3),
         // catalog read нужен workflow для resolve domainId по codesetId.
         VersionLifecyclePort lifecycle = AuthoringModule.buildLifecyclePort(jdbi);
+        // V2 / BR-18 (ADR-009): движок переходов — enum (дефолт) либо Flowable.
+        // Flowable получает свои JDBC-координаты (собственный пул, схема
+        // workflow_engine — Flyway V031 уже создал её выше).
+        WorkflowModule.EngineKind engineKind = config.getWorkflow().isFlowable()
+                ? WorkflowModule.EngineKind.FLOWABLE
+                : WorkflowModule.EngineKind.ENUM;
+        WorkflowModule.FlowableDbConfig flowableDb = config.getWorkflow().isFlowable()
+                ? new WorkflowModule.FlowableDbConfig(
+                        config.getDatabase().getUrl(),
+                        config.getDatabase().getUser(),
+                        config.getDatabase().getPassword())
+                : null;
+        log.info("Workflow engine: {}", engineKind);
         WorkflowModule.Resources workflow = WorkflowModule.build(
-                jdbi, lifecycle, ownershipPort, catalogReadPort, eventBus);
+                jdbi, lifecycle, ownershipPort, catalogReadPort, eventBus,
+                engineKind, flowableDb);
         environment.jersey().register(workflow.transitions());
         environment.jersey().register(workflow.myTasks());
+        // Flowable-движок закрывается на остановке сервиса (Managed).
+        workflow.engineManager().ifPresent(environment.lifecycle()::manage);
 
         // E6 — Publishing. Подписка на WorkflowTransitionDomainEvent с to=OWNER_APPROVED:
         // PublishingService автоматически создаёт snapshot, считает SHA-256 + HMAC и

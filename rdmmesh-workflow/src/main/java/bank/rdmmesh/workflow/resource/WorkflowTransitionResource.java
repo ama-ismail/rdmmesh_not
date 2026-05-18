@@ -21,6 +21,7 @@ import bank.rdmmesh.api.port.WorkflowPort;
 import bank.rdmmesh.api.security.RdmmeshPrincipal;
 import bank.rdmmesh.spec.api.TransitionRequest;
 import bank.rdmmesh.spec.events.WorkflowTransitionEvent;
+import bank.rdmmesh.workflow.internal.engine.WorkflowEngine;
 import bank.rdmmesh.workflow.internal.service.WorkflowService;
 import io.dropwizard.auth.Auth;
 
@@ -42,9 +43,11 @@ import io.dropwizard.auth.Auth;
 @Consumes(MediaType.APPLICATION_JSON)
 public final class WorkflowTransitionResource {
 
+    private final WorkflowEngine engine;
     private final WorkflowService service;
 
-    public WorkflowTransitionResource(WorkflowService service) {
+    public WorkflowTransitionResource(WorkflowEngine engine, WorkflowService service) {
+        this.engine = engine;
         this.service = service;
     }
 
@@ -60,7 +63,7 @@ public final class WorkflowTransitionResource {
         }
         UUID id = parseUuid(versionId, "versionId");
         try {
-            WorkflowTransitionEvent ev = service.transition(
+            WorkflowTransitionEvent ev = engine.transition(
                     id,
                     req.getTo().value(),
                     principal.omUserId(),
