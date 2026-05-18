@@ -153,6 +153,9 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         environment.jersey().register(workflow.myTasks());
         // Flowable-движок закрывается на остановке сервиса (Managed).
         workflow.engineManager().ifPresent(environment.lifecycle()::manage);
+        // V2 / BR-18 round 2: REST per-domain BPMN-шаблонов — только при
+        // engine=flowable (RDM_ADMIN; для enum-движка шаблоны бессмысленны).
+        workflow.templates().ifPresent(environment.jersey()::register);
 
         // E6 — Publishing. Подписка на WorkflowTransitionDomainEvent с to=OWNER_APPROVED:
         // PublishingService автоматически создаёт snapshot, считает SHA-256 + HMAC и

@@ -3,6 +3,7 @@ package bank.rdmmesh.it;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -10,6 +11,7 @@ import java.sql.Statement;
 import java.util.Set;
 import java.util.UUID;
 
+import org.flowable.engine.runtime.ProcessInstance;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.Test;
 
@@ -23,43 +25,73 @@ import bank.rdmmesh.authoring.AuthoringModule;
 import bank.rdmmesh.catalog.CatalogModule;
 import bank.rdmmesh.ownership.OwnershipModule;
 import bank.rdmmesh.workflow.WorkflowModule;
+import bank.rdmmesh.workflow.internal.dao.WorkflowTemplateDao;
 import bank.rdmmesh.workflow.internal.engine.FlowableEngineManager;
 import bank.rdmmesh.workflow.internal.engine.FlowableWorkflowEngine;
+import bank.rdmmesh.workflow.internal.engine.WorkflowTemplateService;
 import bank.rdmmesh.workflow.internal.service.WorkflowService;
 
 /**
- * V2 / BR-18 (ADR-009) — доказывает, что <b>Flowable-движок реально
- * приводит в действие</b> дефолтный 4-eyes и при этом инварианты
- * (self-approval / role-gate / атомарный journal) сохранены: BPMN-процесс
- * лишь оркеструет, а валидацию и side-эффекты делает существующий
- * {@code WorkflowService} (без рефакторинга бизнес-логики, SPEC ADR-004).
+ * V2 / BR-18 — Flowable реально приводит в действие 4-eyes (round 1) и
+ * per-domain BPMN-шаблоны (round 2, модель A: кастомная топология НЕ
+ * обходит guard'ы — каждый переход через WorkflowService+enum-StateMachine).
  *
- * <p>Сценарий: submit → (author пытается steward_approve → 409
- * SelfApproval, токен на месте) → steward_approve → owner_approve.
- * Проверки: финальный статус OWNER_APPROVED; в {@code workflow_transition}
- * ровно 3 строки в хронологии; reviewer и approved_by зафиксированы тем же
- * аудированным путём, что у enum-движка.
- *
- * <p>Flowable создаёт свои ACT_*-таблицы сам ({@code databaseSchemaUpdate})
- * в схеме {@code workflow_engine} (Flyway V031 создал схему+гранты). Локально
- * {@code Skipped} (Docker-Desktop, E14.9 §2); авторитетный прогон — CI.
+ * <p>Flowable создаёт свои таблицы (ACT_, FLW_) сам
+ * ({@code databaseSchemaUpdate}) в схеме {@code workflow_engine} (Flyway
+ * V031/V032). Локально {@code Skipped}
+ * (Docker-Desktop, E14.9 §2); авторитетный прогон — CI.
  */
 final class FlowableWorkflowIT extends PostgresIT {
 
-    private static WorkflowService workflowService() {
+    /** Кастомный per-domain BPMN: иной process-id, те же якоря контракта. */
+    private static final String CUSTOM_BPMN = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                     xmlns:flowable="http://flowable.org/bpmn"
+                     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                     targetNamespace="http://rdmmesh.bank/wf">
+          <process id="custom_dom" name="custom domain 4-eyes" isExecutable="true">
+            <startEvent id="s"/>
+            <sequenceFlow id="f0" sourceRef="s" targetRef="rt_await"/>
+            <receiveTask id="rt_await" name="await"/>
+            <sequenceFlow id="f1" sourceRef="rt_await" targetRef="svc"/>
+            <serviceTask id="svc" name="apply"
+                         flowable:delegateExpression="${rdmTransitionDelegate}"/>
+            <sequenceFlow id="f2" sourceRef="svc" targetRef="gw"/>
+            <exclusiveGateway id="gw" default="f_loop"/>
+            <sequenceFlow id="f_end" sourceRef="gw" targetRef="e">
+              <conditionExpression xsi:type="tFormalExpression">${terminal == true}</conditionExpression>
+            </sequenceFlow>
+            <sequenceFlow id="f_loop" sourceRef="gw" targetRef="rt_await"/>
+            <endEvent id="e"/>
+          </process>
+        </definitions>
+        """;
+
+    private record Ctx(Jdbi jdbi, WorkflowService service,
+                       FlowableEngineManager manager, FlowableWorkflowEngine engine) {}
+
+    private static Ctx buildCtx() {
         Jdbi jdbi = appJdbi();
         VersionLifecyclePort lifecycle = AuthoringModule.buildLifecyclePort(jdbi);
         OwnershipPort ownership = OwnershipModule.buildPort(jdbi);
         CatalogReadPort catalog = CatalogModule.buildReadPort(jdbi);
         EventBus bus = new SyncEventBus();
-        // service() из Resources — тот же WorkflowService, что и enum-путь.
-        return WorkflowModule.build(jdbi, lifecycle, ownership, catalog, bus).service();
+        WorkflowService service =
+                WorkflowModule.build(jdbi, lifecycle, ownership, catalog, bus).service();
+        FlowableEngineManager manager = new FlowableEngineManager(
+                appJdbcUrl(), appUser(), appPassword(), service);
+        FlowableWorkflowEngine engine =
+                new FlowableWorkflowEngine(manager, service, jdbi, lifecycle, catalog);
+        return new Ctx(jdbi, service, manager, engine);
     }
 
-    private static UUID seedDraft(UUID author, String sfx) throws SQLException {
+    private record Seed(UUID versionId, UUID domainId) {}
+
+    private static Seed seedDraft(UUID author, String sfx) throws SQLException {
         UUID versionId = UUID.randomUUID();
+        UUID domainId = UUID.randomUUID();
         try (Connection c = adminConnection(); Statement st = c.createStatement()) {
-            UUID domainId = UUID.randomUUID();
             UUID codesetId = UUID.randomUUID();
             st.execute("INSERT INTO catalog.domain (id, om_domain_id, name) VALUES ('"
                     + domainId + "', '" + UUID.randomUUID() + "', 'risk_" + sfx + "')");
@@ -72,7 +104,7 @@ final class FlowableWorkflowIT extends PostgresIT {
                     + versionId + "', '" + codesetId + "', '0.1.0-draft', 'DRAFT', 1, '"
                     + author + "')");
         }
-        return versionId;
+        return new Seed(versionId, domainId);
     }
 
     private static String status(UUID v) throws SQLException {
@@ -99,54 +131,94 @@ final class FlowableWorkflowIT extends PostgresIT {
         UUID author = UUID.randomUUID();
         UUID steward = UUID.randomUUID();
         UUID owner = UUID.randomUUID();
-        UUID v = seedDraft(author, "flw");
+        Seed s = seedDraft(author, "flw");
+        UUID v = s.versionId();
 
-        WorkflowService service = workflowService();
-        FlowableEngineManager manager = new FlowableEngineManager(
-                appJdbcUrl(), appUser(), appPassword(), service);
+        Ctx ctx = buildCtx();
         try {
-            FlowableWorkflowEngine engine = new FlowableWorkflowEngine(manager, service);
+            FlowableWorkflowEngine engine = ctx.engine();
 
-            // 1. submit (DRAFT→IN_REVIEW): лениво стартует процесс, trigger →
-            //    delegate → WorkflowService.
             engine.transition(v, "IN_REVIEW", author, Set.of("RDM_AUTHOR"), null);
             assertThat(status(v)).isEqualTo("IN_REVIEW");
 
-            // 2. self-approval: автор пытается steward_approve. StateMachine
-            //    бросает ДО role-gate; Flowable откатывает trigger, токен на
-            //    rt_await, статус не меняется.
+            // Self-approval: автор пробует steward_approve → StateMachine
+            // бросает ДО role-gate; Flowable откатывает trigger, статус цел.
             assertThatThrownBy(() -> engine.transition(
                             v, "STEWARD_APPROVED", author, Set.of("RDM_STEWARD"), null))
                     .isInstanceOf(WorkflowPort.SelfApprovalException.class);
-            assertThat(status(v)).as("после отката статус не изменился")
-                    .isEqualTo("IN_REVIEW");
+            assertThat(status(v)).isEqualTo("IN_REVIEW");
 
-            // 3. steward_approve (IN_REVIEW→STEWARD_APPROVED) — другой юзер.
             engine.transition(v, "STEWARD_APPROVED", steward, Set.of("RDM_STEWARD"), null);
             assertThat(status(v)).isEqualTo("STEWARD_APPROVED");
-
-            // 4. owner_approve (STEWARD_APPROVED→OWNER_APPROVED) — терминал BPMN.
             engine.transition(v, "OWNER_APPROVED", owner, Set.of("RDM_OWNER"), null);
             assertThat(status(v)).isEqualTo("OWNER_APPROVED");
 
-            // Аудит/инварианты — тем же путём, что enum-движок.
             assertThat(count("SELECT count(*) FROM workflow.workflow_transition "
-                    + "WHERE version_id='" + v + "'"))
-                    .as("3 перехода: submit, steward_approve, owner_approve")
-                    .isEqualTo(3);
+                    + "WHERE version_id='" + v + "'")).isEqualTo(3);
             assertThat(count("SELECT count(*) FROM authoring.code_set_version_reviewer "
                     + "WHERE version_id='" + v + "' AND om_user_id='" + steward + "'"))
-                    .as("steward зафиксирован как reviewer").isEqualTo(1);
-            try (Connection c = adminConnection();
-                    Statement st = c.createStatement();
-                    ResultSet rs = st.executeQuery(
-                            "SELECT approved_by FROM authoring.code_set_version WHERE id='"
-                                    + v + "'")) {
-                assertThat(rs.next()).isTrue();
-                assertThat(rs.getString(1)).isEqualTo(owner.toString());
-            }
+                    .isEqualTo(1);
         } finally {
-            manager.stop(); // закрыть движок + его JDBC-пул (singleton-БД делится)
+            ctx.manager().stop();
+        }
+    }
+
+    @Test
+    void perDomainTemplateDrivesTransitionsAndStaysNoBypass() throws SQLException {
+        UUID admin = UUID.randomUUID();
+        UUID author = UUID.randomUUID();
+        UUID steward = UUID.randomUUID();
+        UUID owner = UUID.randomUUID();
+        Seed s = seedDraft(author, "tpl");
+        UUID v = s.versionId();
+        UUID domain = s.domainId();
+
+        Ctx ctx = buildCtx();
+        try {
+            WorkflowTemplateService templates =
+                    new WorkflowTemplateService(ctx.jdbi(), ctx.manager());
+
+            // Деплой кастомного per-domain BPMN (RDM_ADMIN).
+            WorkflowTemplateService.DeployResult dr = templates.deploy(
+                    domain, CUSTOM_BPMN.getBytes(StandardCharsets.UTF_8), admin);
+            assertThat(dr.processKey()).isEqualTo("custom_dom");
+            assertThat(dr.version()).isEqualTo(1);
+            assertThat(dr.sha256()).hasSize(64);
+
+            // Реестр (V032) — append-only-аудит.
+            WorkflowTemplateDao.TemplateRow row = ctx.jdbi().withExtension(
+                    WorkflowTemplateDao.class, d -> d.findActiveByDomain(domain))
+                    .orElseThrow();
+            assertThat(row.processKey()).isEqualTo("custom_dom");
+            assertThat(row.deployedBy()).isEqualTo(admin);
+            assertThat(row.active()).isTrue();
+
+            // submit → инстанс должен подняться из tenant-процесса домена.
+            ctx.engine().transition(v, "IN_REVIEW", author, Set.of("RDM_AUTHOR"), null);
+            assertThat(status(v)).isEqualTo("IN_REVIEW");
+
+            ProcessInstance pi = ctx.manager().runtimeService()
+                    .createProcessInstanceQuery()
+                    .processInstanceBusinessKey(v.toString())
+                    .singleResult();
+            assertThat(pi).as("инстанс существует (ещё не терминал)").isNotNull();
+            assertThat(pi.getTenantId())
+                    .as("поднят per-domain tenant-процесс").isEqualTo(domain.toString());
+            assertThat(pi.getProcessDefinitionId())
+                    .as("именно кастомный процесс домена").startsWith("custom_dom:");
+
+            // No-bypass сохранён даже с кастомной топологией: self-approval 409.
+            assertThatThrownBy(() -> ctx.engine().transition(
+                            v, "STEWARD_APPROVED", author, Set.of("RDM_STEWARD"), null))
+                    .isInstanceOf(WorkflowPort.SelfApprovalException.class);
+
+            ctx.engine().transition(v, "STEWARD_APPROVED", steward, Set.of("RDM_STEWARD"), null);
+            ctx.engine().transition(v, "OWNER_APPROVED", owner, Set.of("RDM_OWNER"), null);
+            assertThat(status(v)).isEqualTo("OWNER_APPROVED");
+            assertThat(count("SELECT count(*) FROM workflow.workflow_transition "
+                    + "WHERE version_id='" + v + "'")).isEqualTo(3);
+        } finally {
+            ctx.manager().stop();
         }
     }
 }

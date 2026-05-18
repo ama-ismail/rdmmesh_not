@@ -1,12 +1,14 @@
 package bank.rdmmesh.workflow.internal.engine;
 
 import java.util.Map;
+import java.util.UUID;
 
 import org.flowable.engine.ProcessEngine;
 import org.flowable.engine.ProcessEngineConfiguration;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.impl.cfg.ProcessEngineConfigurationImpl;
+import org.flowable.engine.repository.Deployment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -90,6 +92,35 @@ public final class FlowableEngineManager implements Managed {
 
     public RuntimeService runtimeService() {
         return engine.getRuntimeService();
+    }
+
+    /** Результат деплоя per-domain BPMN (V2 / BR-18 round 2). */
+    public record DomainDeployment(String flowableDeploymentId, String processKey) {}
+
+    /**
+     * Деплоит per-domain BPMN в Flowable с {@code tenantId=domainId}
+     * (нативная мульти-аренда). Контракт шаблона проверяется ДО деплоя
+     * ({@link BpmnTemplateValidator}); невалидный → IllegalArgumentException
+     * (resource → 400), в Flowable ничего не попадает.
+     */
+    public DomainDeployment deployForDomain(UUID domainId, byte[] bpmnXml) {
+        BpmnTemplateValidator.Contract c = BpmnTemplateValidator.validate(bpmnXml);
+        Deployment d = engine.getRepositoryService().createDeployment()
+                .name("rdm-domain-" + domainId)
+                .tenantId(domainId.toString())
+                .addBytes(c.processKey() + ".bpmn20.xml", bpmnXml)
+                .deploy();
+        log.info("Flowable: per-domain template deployed domain={} key={} deployment={}",
+                domainId, c.processKey(), d.getId());
+        return new DomainDeployment(d.getId(), c.processKey());
+    }
+
+    /** Есть ли в Flowable определение {@code processKey} для tenant=domainId. */
+    public boolean hasTenantProcess(String processKey, UUID domainId) {
+        return engine.getRepositoryService().createProcessDefinitionQuery()
+                .processDefinitionKey(processKey)
+                .processDefinitionTenantId(domainId.toString())
+                .count() > 0;
     }
 
     @Override

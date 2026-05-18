@@ -2,16 +2,21 @@ package bank.rdmmesh.workflow.internal.engine;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.runtime.Execution;
+import org.jdbi.v3.core.Jdbi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import bank.rdmmesh.api.port.CatalogReadPort;
+import bank.rdmmesh.api.port.VersionLifecyclePort;
 import bank.rdmmesh.api.port.WorkflowPort;
 import bank.rdmmesh.spec.events.WorkflowTransitionEvent;
+import bank.rdmmesh.workflow.internal.dao.WorkflowTemplateDao;
 import bank.rdmmesh.workflow.internal.service.WorkflowService;
 
 /**
@@ -49,10 +54,18 @@ public final class FlowableWorkflowEngine implements WorkflowEngine {
 
     private final FlowableEngineManager engine;
     private final WorkflowService service;
+    private final Jdbi jdbi;
+    private final VersionLifecyclePort lifecycle;
+    private final CatalogReadPort catalog;
 
-    public FlowableWorkflowEngine(FlowableEngineManager engine, WorkflowService service) {
+    public FlowableWorkflowEngine(FlowableEngineManager engine, WorkflowService service,
+                                  Jdbi jdbi, VersionLifecyclePort lifecycle,
+                                  CatalogReadPort catalog) {
         this.engine = engine;
         this.service = service;
+        this.jdbi = jdbi;
+        this.lifecycle = lifecycle;
+        this.catalog = catalog;
     }
 
     @Override
@@ -73,8 +86,10 @@ public final class FlowableWorkflowEngine implements WorkflowEngine {
                 log.debug("flowable: no rt_await for version={} → service fallback", bk);
                 return service.transition(versionId, targetStatus, actor, baseRoles, comment);
             }
-            // Первый переход версии — лениво стартуем процесс (встанет на rt_await).
-            rt.startProcessInstanceByKey(FlowableEngineManager.PROCESS_KEY, bk);
+            // Первый переход версии — лениво стартуем процесс (встанет на
+            // rt_await). Топология — per-domain шаблон (если задеплоен для
+            // домена CodeSet'а), иначе дефолтный rdm4eyes.
+            startInstance(rt, versionId, bk);
             await = awaitExecution(rt, bk);
             if (await == null) {
                 // Теоретически недостижимо (start → rt_await). Не молча
@@ -107,6 +122,48 @@ public final class FlowableWorkflowEngine implements WorkflowEngine {
             throw unwrap(e);
         } finally {
             TransitionResultHolder.clear();
+        }
+    }
+
+    /**
+     * Стартует инстанс: если для домена CodeSet'а версии есть активный
+     * per-domain шаблон (V032) и Flowable знает его tenant-определение —
+     * {@code startProcessInstanceByKeyAndTenantId}; иначе дефолтный
+     * {@code rdm4eyes} (без tenant). Резолв домена best-effort: любой сбой
+     * → дефолт (никогда не блокируем переход из-за выбора топологии;
+     * легальность всё равно авторитетна в WorkflowService).
+     */
+    private void startInstance(RuntimeService rt, UUID versionId, String bk) {
+        UUID domainId = resolveDomain(versionId);
+        if (domainId != null) {
+            Optional<WorkflowTemplateDao.TemplateRow> tpl = jdbi.withExtension(
+                    WorkflowTemplateDao.class, d -> d.findActiveByDomain(domainId));
+            if (tpl.isPresent()
+                    && engine.hasTenantProcess(tpl.get().processKey(), domainId)) {
+                log.debug("flowable: version={} → per-domain template domain={} key={}",
+                        bk, domainId, tpl.get().processKey());
+                rt.startProcessInstanceByKeyAndTenantId(
+                        tpl.get().processKey(), bk, domainId.toString());
+                return;
+            }
+        }
+        rt.startProcessInstanceByKey(FlowableEngineManager.PROCESS_KEY, bk);
+    }
+
+    private UUID resolveDomain(UUID versionId) {
+        try {
+            VersionLifecyclePort.VersionSnapshot v =
+                    lifecycle.findVersion(versionId).orElse(null);
+            if (v == null) {
+                return null;
+            }
+            CatalogReadPort.CodeSetSnapshot cs =
+                    catalog.findCodeSet(v.codesetId()).orElse(null);
+            return cs == null ? null : cs.domainId();
+        } catch (RuntimeException e) {
+            log.debug("flowable: resolveDomain({}) failed → default topology: {}",
+                    versionId, e.toString());
+            return null;
         }
     }
 

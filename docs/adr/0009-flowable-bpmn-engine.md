@@ -55,6 +55,33 @@ ADR-004 зафиксировал enum-`StateMachine` для MVP и явно пр
 - **Полный BR-18 сразу** (per-domain хранилище+REST+деплой) — больше
   риска; вынесено в следующий раунд.
 
+## Round 2 — per-domain BPMN-шаблоны (2026-05-18)
+
+Развитие ADR в рамках того же seam. Подтверждённые решения:
+
+- **Guard-модель A.** Per-domain BPMN меняет оркестрацию, но легальность
+  и guard'ы (self-approval / role-gate / no-bypass) остаются авторитетно
+  в enum-`StateMachine` внутри `WorkflowService` (каждый переход всё
+  равно проходит через делегат → `WorkflowService.transition`). Кастомная
+  топология **не может** обойти 4-eyes по построению (SPEC §3.2 #7).
+  Цена: «кастомность» ограничена формой, разрешённой enum-матрицей
+  (полный topology-as-data — потенциальный отдельный ADR, если бизнес
+  потребует расходящиеся маршруты).
+- **Flowable native multi-tenancy.** Per-domain BPMN деплоится с
+  `tenantId=domainId`; `FlowableWorkflowEngine` при старте инстанса
+  выбирает tenant-процесс домена CodeSet'а, иначе дефолтный `rdm4eyes`
+  (резолв домена best-effort — сбой → дефолт, переход не блокируется).
+- **Контракт шаблона** (`BpmnTemplateValidator`, deploy-time → 400):
+  BPMN обязан содержать receive-task `rt_await` и service-task
+  `delegateExpression=${rdmTransitionDelegate}` (якоря движка). Глубокая
+  compliance-валидация топологии не нужна — её роль выполняет модель A.
+- **Реестр/аудит** `workflow.workflow_template` (Flyway V032,
+  append-only-по-смыслу): кто/когда/sha256/версия активного шаблона
+  домена — воспроизводимость (SPEC §2.3). Управление —
+  `RDM_ADMIN`-only REST, регистрируется лишь при `engine=flowable`.
+- **Долг round 3:** очистка осиротевших Flowable-инстансов при DELETE
+  DRAFT; (опц.) полноценный topology-as-data, если потребуется.
+
 ## Последствия
 
 - Положительные: реальный BPMN-движок за тем же `WorkflowPort`; субстрат

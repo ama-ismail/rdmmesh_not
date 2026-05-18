@@ -16,8 +16,10 @@ import bank.rdmmesh.workflow.internal.engine.EnumWorkflowEngine;
 import bank.rdmmesh.workflow.internal.engine.FlowableEngineManager;
 import bank.rdmmesh.workflow.internal.engine.FlowableWorkflowEngine;
 import bank.rdmmesh.workflow.internal.engine.WorkflowEngine;
+import bank.rdmmesh.workflow.internal.engine.WorkflowTemplateService;
 import bank.rdmmesh.workflow.internal.service.WorkflowService;
 import bank.rdmmesh.workflow.resource.MyTasksResource;
+import bank.rdmmesh.workflow.resource.WorkflowTemplateResource;
 import bank.rdmmesh.workflow.resource.WorkflowTransitionResource;
 
 /**
@@ -70,6 +72,7 @@ public final class WorkflowModule {
 
         WorkflowEngine engine;
         FlowableEngineManager manager = null;
+        WorkflowTemplateResource templateResource = null;
         if (kind == EngineKind.FLOWABLE) {
             if (flowableDb == null) {
                 throw new IllegalArgumentException(
@@ -78,7 +81,10 @@ public final class WorkflowModule {
             manager = new FlowableEngineManager(
                     flowableDb.jdbcUrl(), flowableDb.user(), flowableDb.password(),
                     service);
-            engine = new FlowableWorkflowEngine(manager, service);
+            engine = new FlowableWorkflowEngine(manager, service, jdbi, lifecycle, catalog);
+            // V2 / BR-18 round 2: per-domain BPMN-шаблоны (только при Flowable).
+            templateResource = new WorkflowTemplateResource(
+                    new WorkflowTemplateService(jdbi, manager));
         } else {
             engine = new EnumWorkflowEngine(service);
         }
@@ -88,7 +94,8 @@ public final class WorkflowModule {
                 new PostgresWorkflowPort(service),
                 new WorkflowTransitionResource(engine, service),
                 new MyTasksResource(service),
-                Optional.ofNullable(manager));
+                Optional.ofNullable(manager),
+                Optional.ofNullable(templateResource));
     }
 
     /** Тонкий append-only порт для системных post-hoc transitions (publish/deprecate из E6). */
@@ -106,5 +113,6 @@ public final class WorkflowModule {
             WorkflowPort port,
             WorkflowTransitionResource transitions,
             MyTasksResource myTasks,
-            Optional<FlowableEngineManager> engineManager) {}
+            Optional<FlowableEngineManager> engineManager,
+            Optional<WorkflowTemplateResource> templates) {}
 }
