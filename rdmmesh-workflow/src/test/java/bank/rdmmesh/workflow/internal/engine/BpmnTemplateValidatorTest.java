@@ -64,13 +64,15 @@ final class BpmnTemplateValidatorTest {
 
     @Test
     void nonCompliantGraphInBpmnRejectedAtDeploy() {
-        // Прямое DRAFT→OWNER_APPROVED в обход steward.
+        // Прямое DRAFT→OWNER_APPROVED в обход steward — deploy-gate
+        // (какой именно инвариант сработал первым — не важно; важно, что
+        // граф отвергнут и в Flowable/реестр НЕ попал).
         String bad = "[{\"from\":\"DRAFT\",\"to\":\"OWNER_APPROVED\","
                 + "\"action\":\"owner_approve\",\"kind\":\"OWNER\"}]";
         assertThatThrownBy(() -> BpmnTemplateValidator.validate(
                         bpmn(graphExt(bad) + AWAIT + DELEGATE)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("STEWARD");
+                .hasMessageContaining("Compliance");
     }
 
     @Test

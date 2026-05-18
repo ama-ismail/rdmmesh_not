@@ -96,6 +96,87 @@ final class WorkflowGraphInvariantsTest {
                 .hasMessageContaining("недостижим");
     }
 
+    // ── B3 security-review findings ─────────────────────────────────────────────
+
+    @Test
+    void stewardEdgeWithoutRecordReviewerRejected_FB1() {
+        // F-B1: steward не записан → OWNER-guard (actor∉reviewers) НЕ ловит
+        // steward==owner → 4-eyes → 2-eyes. Должно отвергаться при деплое.
+        WorkflowGraph bad = WorkflowGraph.builder()
+                .edge(Status.DRAFT, Status.IN_REVIEW,
+                        Action.submit, Kind.SUBMIT, false, false, false)
+                .edge(Status.IN_REVIEW, Status.STEWARD_APPROVED,
+                        Action.steward_approve, Kind.STEWARD, false,
+                        /* recordReviewer */ false, false)
+                .edge(Status.STEWARD_APPROVED, Status.OWNER_APPROVED,
+                        Action.owner_approve, Kind.OWNER, false, false, true)
+                .build();
+        assertThatThrownBy(() -> WorkflowGraphInvariants.validate(bad))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("F-B1");
+    }
+
+    @Test
+    void ownerTerminalWithoutSetApproverRejected() {
+        WorkflowGraph bad = WorkflowGraph.builder()
+                .edge(Status.DRAFT, Status.IN_REVIEW,
+                        Action.submit, Kind.SUBMIT, false, false, false)
+                .edge(Status.IN_REVIEW, Status.STEWARD_APPROVED,
+                        Action.steward_approve, Kind.STEWARD, false, true, false)
+                .edge(Status.STEWARD_APPROVED, Status.OWNER_APPROVED,
+                        Action.owner_approve, Kind.OWNER, false, false,
+                        /* setApprover */ false)
+                .build();
+        assertThatThrownBy(() -> WorkflowGraphInvariants.validate(bad))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("setApprover");
+    }
+
+    @Test
+    void systemShortcutEdgeRejected_FB4() {
+        WorkflowGraph bad = WorkflowGraph.builder()
+                .edge(Status.DRAFT, Status.IN_REVIEW,
+                        Action.submit, Kind.SUBMIT, false, false, false)
+                .edge(Status.IN_REVIEW, Status.STEWARD_APPROVED,
+                        Action.steward_approve, Kind.STEWARD, false, true, false)
+                .edge(Status.STEWARD_APPROVED, Status.OWNER_APPROVED,
+                        Action.owner_approve, Kind.OWNER, false, false, true)
+                .edge(Status.DRAFT, Status.PUBLISHED,
+                        Action.publish, Kind.SYSTEM, false, false, false)
+                .build();
+        assertThatThrownBy(() -> WorkflowGraphInvariants.validate(bad))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("F-B4");
+    }
+
+    @Test
+    void noBypassChain_stewardRecordedThenSameActorAsOwnerBlocked() {
+        // Любой ПРОШЕДШИЙ инварианты граф → steward non-reject имеет
+        // recordReviewer (F-B1 fix). Симулируем рантайм: steward записан в
+        // reviewers, тот же actor пытается owner_approve → SelfApproval.
+        WorkflowGraph g = WorkflowGraph.defaultFourEyes();
+        WorkflowGraphInvariants.validate(g);
+
+        UUID author = UUID.randomUUID();
+        UUID sameApprover = UUID.randomUUID();
+
+        StateMachine.Decision sd = StateMachine.validate(new Request(
+                Status.IN_REVIEW, Status.STEWARD_APPROVED,
+                sameApprover, author, Set.of(), Set.of(),
+                Set.of("RDM_STEWARD"), null), g);
+        assertThat(sd.recordReviewer())
+                .as("STEWARD-ребро записывает reviewer (инвариант гарантирует)")
+                .isTrue();
+
+        // reviewers теперь содержит sameApprover (эффект recordReviewer).
+        // Тот же человек как owner → OWNER-guard ловит.
+        assertThatThrownBy(() -> StateMachine.validate(new Request(
+                        Status.STEWARD_APPROVED, Status.OWNER_APPROVED,
+                        sameApprover, author, Set.of(sameApprover), Set.of(),
+                        Set.of("RDM_OWNER"), null), g))
+                .isInstanceOf(WorkflowPort.SelfApprovalException.class);
+    }
+
     @Test
     void customButCompliantGraphPasses() {
         // Кастом: без owner_reject/publish-рёбер, но steward→owner-цепочка цела.

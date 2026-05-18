@@ -33,9 +33,19 @@ import bank.rdmmesh.workflow.internal.WorkflowGraph.Kind;
  *       STEWARD-approve-ребро (kind=STEWARD, !reject), затем — позже —
  *       OWNER-approve-ребро (kind=OWNER, !reject);</li>
  *   <li>каждое ребро c {@code to == OWNER_APPROVED} — kind OWNER, !reject
- *       (нельзя «въехать» в терминал submit'ом/системой);</li>
+ *       <b>и {@code setApprover=true}</b> (approver фиксируется, иначе
+ *       нарушается целостность подписи/аудита E6);</li>
  *   <li>reject-ребро — только kind STEWARD/OWNER (reviewer-действие, не
- *       SUBMIT/SYSTEM).</li>
+ *       SUBMIT/SYSTEM);</li>
+ *   <li><b>(B3, finding F-B1)</b> каждое non-reject STEWARD-ребро ОБЯЗАНО
+ *       {@code recordReviewer=true}. Иначе steward не попадает в
+ *       {@code reviewers}, и runtime-guard OWNER ({@code actor ∉
+ *       reviewers}) НЕ ловит «steward==owner» — 4-eyes деградирует до
+ *       2-eyes. Это и есть условие, на котором держится теорема;</li>
+ *   <li><b>(B3, finding F-B4)</b> SYSTEM-ребро допустимо только формой
+ *       {@code OWNER_APPROVED→PUBLISHED} либо {@code PUBLISHED→DEPRECATED}
+ *       — нельзя протащить SYSTEM-shortcut (publish требует RDM_SYSTEM,
+ *       но крафт-граф не должен и описывать иной системный маршрут).</li>
  * </ol>
  */
 public final class WorkflowGraphInvariants {
@@ -56,16 +66,36 @@ public final class WorkflowGraphInvariants {
                                 + "kind STEWARD/OWNER, а не " + s.kind());
             }
         }
-        // (3) В терминал — только OWNER-approve.
         for (var en : g.edges().entrySet()) {
-            if (en.getKey().to() == APPROVAL_TERMINAL) {
-                EdgeSpec s = en.getValue();
-                if (s.kind() != Kind.OWNER || s.reject()) {
-                    throw new IllegalArgumentException(
-                            "Compliance: ребро в " + APPROVAL_TERMINAL + " (" + en.getKey()
-                                    + ") должно быть OWNER-approve (kind=OWNER, !reject), "
-                                    + "а не " + s.kind() + (s.reject() ? "/reject" : ""));
-                }
+            Edge e = en.getKey();
+            EdgeSpec s = en.getValue();
+            // (3) В терминал — только OWNER-approve c setApprover.
+            if (e.to() == APPROVAL_TERMINAL
+                    && (s.kind() != Kind.OWNER || s.reject() || !s.setApprover())) {
+                throw new IllegalArgumentException(
+                        "Compliance: ребро в " + APPROVAL_TERMINAL + " (" + e
+                                + ") должно быть OWNER-approve (kind=OWNER, !reject, "
+                                + "setApprover=true), а не " + s.kind()
+                                + (s.reject() ? "/reject" : "")
+                                + (s.setApprover() ? "" : "/no-setApprover"));
+            }
+            // (5, F-B1) non-reject STEWARD — обязан recordReviewer:
+            // иначе steward не в reviewers и OWNER-guard не ловит
+            // steward==owner (теорема no-bypass рушится).
+            if (s.kind() == Kind.STEWARD && !s.reject() && !s.recordReviewer()) {
+                throw new IllegalArgumentException(
+                        "Compliance: STEWARD-approve-ребро " + e + " ОБЯЗАНО "
+                                + "recordReviewer=true (иначе steward==owner обходит "
+                                + "4-eyes — finding F-B1)");
+            }
+            // (6, F-B4) SYSTEM — только фиксированный publish/deprecate-маршрут.
+            if (s.kind() == Kind.SYSTEM
+                    && !(e.from() == Status.OWNER_APPROVED && e.to() == Status.PUBLISHED)
+                    && !(e.from() == Status.PUBLISHED && e.to() == Status.DEPRECATED)) {
+                throw new IllegalArgumentException(
+                        "Compliance: SYSTEM-ребро " + e + " вне разрешённой формы "
+                                + "(OWNER_APPROVED→PUBLISHED | PUBLISHED→DEPRECATED) "
+                                + "— finding F-B4");
             }
         }
         // (1)+(2) Перебор всех простых путей DRAFT→OWNER_APPROVED.

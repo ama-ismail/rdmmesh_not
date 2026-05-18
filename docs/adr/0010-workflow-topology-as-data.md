@@ -102,9 +102,18 @@ prod — gate (DoD §5.4), как E14.8.
   инвариантов на чтении — tampered DB-row не ослабит no-bypass).
   Доказано: IT — owner_reject легален в дефолте, но домен без него в
   графе → IllegalStateTransition; non-compliant граф → 400.
-- **B3:** security-review (OWASP + no-bypass на произвольных графах,
-  как E14.8) + расширенные property-тесты перед включением кастомных
-  графов в prod.
+- **B3 — сделано (E16.6):** security-review attack-surface кастом-графа.
+  Найдены и закрыты: **F-B1 (High)** — STEWARD-ребро без
+  `recordReviewer` ⇒ steward==owner (4-eyes→2-eyes); **F-B4 (Medium)** —
+  неограниченные SYSTEM-рёбра; **integrity** — OWNER→терминал без
+  `setApprover`. `WorkflowGraphInvariants` ужесточён (инварианты 5/6 +
+  setApprover), +4 adversarial-теста, нулевая регрессия (StateMachineTest
+  22/22). Закрывает gate DoD §5.4 для B (ост. — E16.6 §4: прод-онбординг
+  кастом-графов — операционное решение security/compliance банка).
+
+**Итог:** вариант B (topology-as-data) функционально завершён и
+compliance-safe (двойной рубеж deploy+runtime + ревью). Status —
+**Accepted-B, closed**.
 
 ## Последствия (если примут C — на будущее)
 
