@@ -72,6 +72,9 @@ public final class WorkflowService {
     private final OwnershipPort ownership;
     private final CatalogReadPort catalog;
     private final EventBus eventBus;
+    /** E17 / BR-21: справочник ролей домена. {@code null} → адресная
+     *  маршрутизация submit'а отключена (legacy broadcast). */
+    private final bank.rdmmesh.api.port.ApproverDirectoryPort approverDirectory;
 
     public WorkflowService(
             Jdbi jdbi,
@@ -79,11 +82,22 @@ public final class WorkflowService {
             OwnershipPort ownership,
             CatalogReadPort catalog,
             EventBus eventBus) {
+        this(jdbi, lifecycle, ownership, catalog, eventBus, null);
+    }
+
+    public WorkflowService(
+            Jdbi jdbi,
+            VersionLifecyclePort lifecycle,
+            OwnershipPort ownership,
+            CatalogReadPort catalog,
+            EventBus eventBus,
+            bank.rdmmesh.api.port.ApproverDirectoryPort approverDirectory) {
         this.jdbi = jdbi;
         this.lifecycle = lifecycle;
         this.ownership = ownership;
         this.catalog = catalog;
         this.eventBus = eventBus;
+        this.approverDirectory = approverDirectory;
     }
 
     public WorkflowTransitionEvent transition(
@@ -103,8 +117,34 @@ public final class WorkflowService {
                 .orElseThrow(() -> new IllegalStateException(
                         "CodeSet missing for version " + versionId + " (codeset=" + version.codesetId() + ")"));
 
-        Set<String> assetRoles = ownership.rolesOf(version.codesetId(), actor);
+        Set<String> assetRoles = new java.util.HashSet<>(
+                ownership.rolesOf(version.codesetId(), actor));
         Set<UUID> reviewers = lifecycle.reviewersOf(versionId);
+
+        // E17 / BR-21: маршрут версии (кого Author выбрал согласующими при
+        // submit'е). Адресат, назначенный через справочник ролей домена,
+        // получает asset-роль СВОЕЙ ступени именно для этой версии — без
+        // ослабления self-approval/no-bypass (StateMachine всё так же
+        // проверяет actor≠createdBy, actor∉reviewers; граф-инварианты не
+        // тронуты). assignee submit'а приходит из REST через ThreadLocal.
+        java.util.Optional<bank.rdmmesh.workflow.internal.dao.VersionRouteDao.VersionRouteRow>
+                route = jdbi.withExtension(
+                        bank.rdmmesh.workflow.internal.dao.VersionRouteDao.class,
+                        d -> d.findByVersion(versionId));
+        route.ifPresent(r -> {
+            if (actor.equals(r.stewardUserId())) {
+                assetRoles.add("STEWARD");
+            }
+            if (actor.equals(r.ownerUserId())) {
+                assetRoles.add("OWNER");
+            }
+        });
+
+        SubmitAssigneeHolder.Assignee assignee =
+                (to == Status.IN_REVIEW) ? SubmitAssigneeHolder.get() : null;
+        if (assignee != null && approverDirectory != null) {
+            validateAssignee(assignee, codeSet.domainId(), version.createdBy());
+        }
 
         StateMachine.Request req = new StateMachine.Request(
                 from, to, actor, version.createdBy(),
@@ -125,9 +165,29 @@ public final class WorkflowService {
         // code_set_version. Plain pre-fetch вне tx — корректен (роли в OM
         // меняются через webhook, который тоже идёт через свою tx).
         String nextRole = graph.nextRequiredRole(to);
-        UUID[] candidates = (nextRole == null)
-                ? null
-                : candidatesFor(version.codesetId(), nextRole);
+        // E17 / BR-21: адресная задача. submit → STEWARD-задача выбранному
+        // steward'у; после steward_approve → OWNER-задача выбранному
+        // business-owner'у (из version_route). Нет assignee/маршрута →
+        // legacy broadcast по rdm_asset_ownership (обратная совместимость:
+        // ITs, вызывающие service напрямую без assignee).
+        UUID[] candidates;
+        String assignedRole;
+        if (nextRole == null) {
+            candidates = null;
+            assignedRole = null;
+        } else if (assignee != null && "STEWARD".equals(nextRole)) {
+            candidates = new UUID[] { assignee.stewardUserId() };
+            assignedRole = bank.rdmmesh.api.port.ApproverDirectoryPort.STEWARD;
+        } else if (route.isPresent() && "OWNER".equals(nextRole)) {
+            candidates = new UUID[] { route.get().ownerUserId() };
+            assignedRole = bank.rdmmesh.api.port.ApproverDirectoryPort.BUSINESS_OWNER;
+        } else if (route.isPresent() && "STEWARD".equals(nextRole)) {
+            candidates = new UUID[] { route.get().stewardUserId() };
+            assignedRole = bank.rdmmesh.api.port.ApproverDirectoryPort.STEWARD;
+        } else {
+            candidates = candidatesFor(version.codesetId(), nextRole);
+            assignedRole = null;
+        }
 
         UUID transitionId = UUID.randomUUID();
         Instant occurredAt = Instant.now();
@@ -153,13 +213,24 @@ public final class WorkflowService {
                     actor,
                     comment);
 
+            // E17: атомарно с CAS статуса сохраняем выбранный маршрут
+            // (steward+business-owner), чтобы после steward_approve можно
+            // было адресовать OWNER-задачу выбранному бизнес-владельцу.
+            if (assignee != null) {
+                handle.attach(
+                        bank.rdmmesh.workflow.internal.dao.VersionRouteDao.class)
+                        .upsert(versionId, codeSet.domainId(), version.codesetId(),
+                                assignee.stewardUserId(), assignee.ownerUserId(),
+                                version.createdBy());
+            }
+
             ApprovalTaskDao tasks = handle.attach(ApprovalTaskDao.class);
             // Закрыть текущую задачу для актора (он же её только что выполнил).
             tasks.closeAll(versionId, actor);
             // Открыть следующую задачу для соответствующей роли — если есть.
             if (nextRole != null) {
                 tasks.upsertOpen(versionId, version.codesetId(), codeSet.domainId(),
-                        nextRole, candidates);
+                        nextRole, assignedRole, candidates);
             }
             return true;
         });
@@ -217,6 +288,44 @@ public final class WorkflowService {
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────
+
+    /**
+     * E17 / BR-21: валидация выбранного при submit'е согласующего. Тройка
+     * {@code (domain, role, user)} должна существовать в справочнике ролей
+     * домена; домен обязан совпадать с доменом CodeSet'а; сохраняется
+     * правило self-approval (адресат ≠ автор draft'а). Ошибки маппятся в
+     * REST как 409 (IllegalStateTransition) / 409 (SelfApproval).
+     */
+    private void validateAssignee(
+            SubmitAssigneeHolder.Assignee a, UUID codeSetDomainId, UUID createdBy) {
+        if (a.stewardUserId() == null || a.ownerUserId() == null) {
+            throw new IllegalStateTransitionException(
+                    "submit требует assignee: steward и business-owner");
+        }
+        if (a.domainId() == null || !a.domainId().equals(codeSetDomainId)) {
+            throw new IllegalStateTransitionException(
+                    "assignee.domain_id не совпадает с доменом CodeSet'а");
+        }
+        if (!approverDirectory.isAssignable(
+                codeSetDomainId,
+                bank.rdmmesh.api.port.ApproverDirectoryPort.STEWARD,
+                a.stewardUserId())) {
+            throw new IllegalStateTransitionException(
+                    "выбранный steward не значится в справочнике ролей домена");
+        }
+        if (!approverDirectory.isAssignable(
+                codeSetDomainId,
+                bank.rdmmesh.api.port.ApproverDirectoryPort.BUSINESS_OWNER,
+                a.ownerUserId())) {
+            throw new IllegalStateTransitionException(
+                    "выбранный business-owner не значится в справочнике ролей домена");
+        }
+        if (a.stewardUserId().equals(createdBy) || a.ownerUserId().equals(createdBy)) {
+            throw new bank.rdmmesh.api.port.WorkflowPort.SelfApprovalException(
+                    "Self-approval запрещён: согласующий не может быть автором draft'а");
+        }
+    }
+
 
     /**
      * Граф топологии для домена версии (ADR-0010 B2). Активный шаблон с

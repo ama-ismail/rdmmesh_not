@@ -22,6 +22,7 @@ import bank.rdmmesh.api.security.RdmmeshPrincipal;
 import bank.rdmmesh.spec.api.TransitionRequest;
 import bank.rdmmesh.spec.events.WorkflowTransitionEvent;
 import bank.rdmmesh.workflow.internal.engine.WorkflowEngine;
+import bank.rdmmesh.workflow.internal.service.SubmitAssigneeHolder;
 import bank.rdmmesh.workflow.internal.service.WorkflowService;
 import io.dropwizard.auth.Auth;
 
@@ -62,7 +63,21 @@ public final class WorkflowTransitionResource {
             throw new WebApplicationException("body.to is required", Response.Status.BAD_REQUEST);
         }
         UUID id = parseUuid(versionId, "versionId");
+
+        // E17 / BR-21: на submit (DRAFT → IN_REVIEW) Author обязан выбрать
+        // согласующих — домен + steward-учётку + business-owner-учётку.
+        // Продуктовое правило enforce'ится здесь, на REST-границе;
+        // WorkflowService остаётся толерантным (assignee опционален —
+        // обратная совместимость для ITs, вызывающих service напрямую).
+        boolean isSubmit = "IN_REVIEW".equals(req.getTo().value());
+        SubmitAssigneeHolder.Assignee assignee = null;
+        if (isSubmit) {
+            assignee = parseAssignee(req);
+        }
         try {
+            if (assignee != null) {
+                SubmitAssigneeHolder.set(assignee);
+            }
             WorkflowTransitionEvent ev = engine.transition(
                     id,
                     req.getTo().value(),
@@ -87,7 +102,30 @@ public final class WorkflowTransitionResource {
             throw new WebApplicationException(e.getMessage(), Response.Status.FORBIDDEN);
         } catch (WorkflowPort.IllegalStateTransitionException e) {
             throw new WebApplicationException(e.getMessage(), Response.Status.CONFLICT);
+        } finally {
+            SubmitAssigneeHolder.clear();
         }
+    }
+
+    /**
+     * BR-21: assignee обязателен на submit. Все три поля
+     * (domain_id / steward_om_user_id / owner_om_user_id) — UUID, иначе 400.
+     */
+    private static SubmitAssigneeHolder.Assignee parseAssignee(TransitionRequest req) {
+        var a = req.getAssignee();
+        if (a == null
+                || a.getDomainId() == null
+                || a.getStewardOmUserId() == null
+                || a.getOwnerOmUserId() == null) {
+            throw new WebApplicationException(
+                    "submit требует assignee: domain_id + steward_om_user_id"
+                            + " + owner_om_user_id",
+                    Response.Status.BAD_REQUEST);
+        }
+        return new SubmitAssigneeHolder.Assignee(
+                parseUuid(a.getDomainId(), "assignee.domain_id"),
+                parseUuid(a.getStewardOmUserId(), "assignee.steward_om_user_id"),
+                parseUuid(a.getOwnerOmUserId(), "assignee.owner_om_user_id"));
     }
 
     @GET

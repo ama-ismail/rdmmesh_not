@@ -27,6 +27,20 @@ DOM=$(curl -s -X POST -H "Authorization: Bearer $T_ADMIN" -H 'Content-Type: appl
   "$API/domains" | jget "['id']")
 echo "    domain id = $DOM"
 
+echo "==> E17: справочник ролей домена (BR-21) — резолвлю om_user_id согласующих"
+ME_STEWARD=$(curl -s -H "Authorization: Bearer $T_STEWARD" "$API/auth/me" | jget "['omUserId']")
+ME_OWNER=$(curl -s -H "Authorization: Bearer $T_OWNER" "$API/auth/me" | jget "['omUserId']")
+echo "    steward om_user_id = $ME_STEWARD"
+echo "    owner   om_user_id = $ME_OWNER"
+
+echo "==> reload справочника ролей домена (dev-admin, полная замена TRUNCATE+INSERT)"
+curl -s -o /dev/null -X POST -H "Authorization: Bearer $T_ADMIN" -H 'Content-Type: application/json' \
+  -d "{\"entries\":[
+        {\"om_domain_id\":\"$OMID\",\"role\":\"STEWARD\",\"om_user_id\":\"$ME_STEWARD\",\"username\":\"dev-steward\",\"display_name\":\"Dev Steward\"},
+        {\"om_domain_id\":\"$OMID\",\"role\":\"BUSINESS_OWNER\",\"om_user_id\":\"$ME_OWNER\",\"username\":\"dev-owner\",\"display_name\":\"Dev Owner\"}
+      ]}" \
+  "$API/admin/domain-role-directory/reload"
+
 echo "==> создаю CodeSet ifrs9_stages (dev-author)"
 CS=$(curl -s -X POST -H "Authorization: Bearer $T_AUTHOR" -H 'Content-Type: application/json' \
   -d "{\"name\":\"ifrs9_stages_$SFX\",\"display_name\":\"IFRS9 Stages ($SFX)\",\"hierarchy_mode\":\"NONE\",
@@ -47,9 +61,11 @@ for n in 1 2 3; do
     "$API/versions/$V/items"
 done
 
-echo "==> 4-eyes: submit (author)"
+echo "==> 4-eyes: submit (author) — адресно: steward=dev-steward, owner=dev-owner (BR-21)"
 curl -s -o /dev/null -X POST -H "Authorization: Bearer $T_AUTHOR" -H 'Content-Type: application/json' \
-  -d '{"to":"IN_REVIEW","comment":"готово к ревью"}' "$API/versions/$V/transitions"
+  -d "{\"to\":\"IN_REVIEW\",\"comment\":\"готово к ревью\",
+       \"assignee\":{\"domain_id\":\"$DOM\",\"steward_om_user_id\":\"$ME_STEWARD\",\"owner_om_user_id\":\"$ME_OWNER\"}}" \
+  "$API/versions/$V/transitions"
 echo "==> steward_approve (steward)"
 curl -s -o /dev/null -X POST -H "Authorization: Bearer $T_STEWARD" -H 'Content-Type: application/json' \
   -d '{"to":"STEWARD_APPROVED","comment":"схема ок"}' "$API/versions/$V/transitions"

@@ -30,6 +30,9 @@ export const qk = {
   domains: {
     all: () => ["domains"] as const,
     one: (id: string) => ["domains", id] as const,
+    // E17 / BR-21: кандидаты-согласующие домена (submit-диалог).
+    approvers: (id: string, role: string | null) =>
+      ["domains", id, "approvers", role] as const,
   },
   codesets: {
     byDomain: (domainId: string) => ["codesets", "by-domain", domainId] as const,

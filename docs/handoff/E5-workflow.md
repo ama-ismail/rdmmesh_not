@@ -5,6 +5,17 @@
 > **Дата handoff'а.** 2026-05-05; обновлено 2026-05-05 после прогона build + smoke.
 > **Состояние:** E5 закрыт по содержанию SPEC §5.1 — за исключением переходов `publish` / `deprecate`, которые относятся к E6 (требуют snapshot + content_hash + HMAC). `make verify` зелёный (69 тестов = 19 StateMachineTest + 31 authoring + 8 JwtValidator + 11 ArchUnit). End-to-end smoke 4-eyes flow прошёл по §3.2 — все 14 шагов (submit/self-approval×2/steward_approve/owner_approve/publish-blocked/at-most-one-DRAFT/journal/reviewer/approved_by). Подробнее — §3.1 ниже.
 > **Следующий эпик:** E6 (Publishing). Указатели — в §5.
+>
+> **⚠ Forward-pointer (2026-05-19, не переписывает историю E5).** Введена
+> **адресная маршрутизация согласования** (SPEC §2.2/§2.4, BR-21/BR-22, эпик
+> [`E17-approver-routing.md`](E17-approver-routing.md)): переход `submit`
+> теперь принимает `assignee = {domain_id, role, om_user_id}`, валидирует тройку
+> по новому справочнику `ownership.domain_role_directory` через новый порт
+> `ApproverDirectoryPort`, и создаёт **адресную** `approval_task`
+> (`candidate_users=[assignee]`, `assigned_role`) вместо broadcast'а всем
+> asset-стюардам. Self-approval-проверка сохраняется (теперь и на `assignee`).
+> Описанная ниже E5-матрица переходов и `/tasks/my`-фильтр остаются в силе —
+> меняется payload `submit` и состав `candidate_users`. См. E17 §4.
 
 ---
 

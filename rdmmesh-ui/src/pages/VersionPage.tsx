@@ -130,7 +130,7 @@ export function VersionPage() {
 
               <div style={{ marginTop: 16 }}>
                 <Space wrap>
-                  <WorkflowActions version={v} />
+                  <WorkflowActions version={v} domainId={domainId} />
                   {v.status === "DRAFT" && <DeleteDraftButton versionId={v.id} codesetId={v.codeset_id} />}
                   {codesetVersions.data && (
                     <DiffButton toVersion={v} versionsInCodeset={codesetVersions.data} />

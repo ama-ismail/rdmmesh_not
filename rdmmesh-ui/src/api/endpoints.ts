@@ -1,6 +1,7 @@
 import { apiFetch, apiFetchRaw } from "./client";
 import type {
   ApprovalTask,
+  Approver,
   AuditChainVerifyResult,
   AuditPage,
   AuthMe,
@@ -9,6 +10,7 @@ import type {
   CodeSet,
   CodeSetSchemaDto,
   CodeSetVersion,
+  DirectoryRole,
   DistributionItemsPage,
   Domain,
   ItemsPage,
@@ -52,6 +54,13 @@ export const api = {
   transitionHistory: (versionId: string) =>
     apiFetch<WorkflowTransitionEvent[]>(`/versions/${versionId}/history`),
   myTasks: () => apiFetch<ApprovalTask[]>("/tasks/my"),
+
+  // E17 / BR-21: кандидаты-согласующие домена из справочника ролей домена
+  // (для submit-диалога). role опционален: STEWARD | BUSINESS_OWNER.
+  listApprovers: (domainId: string, role?: DirectoryRole) =>
+    apiFetch<Approver[]>(
+      `/domains/${domainId}/approvers${role ? `?role=${role}` : ""}`,
+    ),
 
   // Publishing
   verifyVersion: (versionId: string) =>
@@ -351,8 +360,17 @@ export interface ItemPatchBody {
   effective_to?: string | null;
 }
 
+// E17 / BR-21: при to=IN_REVIEW (submit) assignee обязателен — Author
+// выбирает домен + steward-учётку + business-owner-учётку.
+export interface TransitionAssignee {
+  domain_id: string;
+  steward_om_user_id: string;
+  owner_om_user_id: string;
+}
+
 export interface TransitionRequest {
   to: VersionStatus;
   comment?: string | null;
   expected_status?: VersionStatus | null;
+  assignee?: TransitionAssignee | null;
 }

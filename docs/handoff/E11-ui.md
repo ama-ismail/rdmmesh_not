@@ -19,6 +19,15 @@
 > через UI, кнопки workflow-перехода, Diff side-by-side, Subscription management
 > admin-экран, Audit viewer. Все backend-эндпоинты для них уже работают (E4–E10);
 > приклеить UI к ним — задача round 2.
+>
+> **⚠ Forward-pointer (2026-05-19, не переписывает историю E11).** Эпик
+> [`E17-approver-routing.md`](E17-approver-routing.md) (SPEC §2.2, BR-21)
+> заменяет «голую» кнопку `submit` (E11.2a `WorkflowActions`) на **диалог
+> выбора согласующего**: домен → роль (`Steward`/`Business Owner`) → учётная
+> запись из `GET /domains/{id}/approvers`. `MyTasksPage` (round 1 §1.2) теперь
+> показывает **адресные** задачи; по клику — переход на уже реализованную
+> `VersionPage` со `Steward approve/reject`. Read-only периметр round 1 и
+> остальные экраны не затрагиваются. См. E17 §6.
 
 ---
 

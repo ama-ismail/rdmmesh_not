@@ -5,6 +5,18 @@
 > **Дата handoff'а.** 2026-05-06.
 > **Состояние:** E7 закрыт по содержанию SPEC §5.1. `make verify` зелёный — **84 теста** (12 новых ownership/webhook + 22 StateMachineTest + 31 authoring + 8 JwtValidator + 11 ArchUnit). End-to-end smoke прошёл по 9 шагам — domain UPSERT, HMAC mismatch, idempotency duplicate, table-event apply + delta, чужой FQN ignored, unknown CodeSet, журнал processed_om_event.
 > **Следующий эпик:** E8 (Distribution). Указатели — в §5.
+>
+> **⚠ Forward-pointer (2026-05-19, не переписывает историю E7).** Эпик
+> [`E17-approver-routing.md`](E17-approver-routing.md) добавляет в модуль
+> `ownership` **отдельный** справочник `ownership.domain_role_directory`
+> (`домен → роль(STEWARD|BUSINESS_OWNER) → учётка`) для адресной маршрутизации
+> согласования (SPEC §2.4, BR-21/BR-22). Это **не** `rdm_asset_ownership`:
+> у справочника другая семантика обновления — **полная замена `TRUNCATE+INSERT`**
+> одной транзакцией (снапшот от мастера), а не дельта-UPSERT по webhook'у,
+> описанному ниже. Мастер — OpenMetadata; на старте локальный сид, позже —
+> OM-генерация (ADR-009). Webhook-канал §1.4 и mapping §1.5 остаются без
+> изменений. `BUSINESS_OWNER` = владелец домена (тот же субъект, что приходит
+> как OM-owner для `entity_type=domain`). См. E17 §2/§5/§7.
 
 ---
 

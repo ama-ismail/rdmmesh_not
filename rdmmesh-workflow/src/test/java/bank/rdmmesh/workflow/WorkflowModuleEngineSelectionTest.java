@@ -29,7 +29,7 @@ final class WorkflowModuleEngineSelectionTest {
     void flowableWithoutDbConfigIsRejected() {
         assertThatThrownBy(() -> WorkflowModule.build(
                         noConnectJdbi(), null, null, null, null,
-                        WorkflowModule.EngineKind.FLOWABLE, null))
+                        null, WorkflowModule.EngineKind.FLOWABLE, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("FlowableDbConfig");
     }

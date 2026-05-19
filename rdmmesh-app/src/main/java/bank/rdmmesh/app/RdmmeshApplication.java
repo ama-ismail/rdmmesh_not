@@ -113,6 +113,14 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         registerJwtAuth(environment, identityPort);
 
         OwnershipPort ownershipPort = OwnershipModule.buildPort(jdbi);
+        // E17 — справочник ролей домена для адресной маршрутизации
+        // согласования (BR-21/BR-22). approvers (UI submit) + reload (admin).
+        bank.rdmmesh.api.port.ApproverDirectoryPort approverDirectory =
+                OwnershipModule.buildApproverDirectoryPort(jdbi);
+        environment.jersey().register(
+                OwnershipModule.buildApproversResource(approverDirectory));
+        environment.jersey().register(
+                OwnershipModule.buildDirectoryAdminResource(approverDirectory));
 
         CatalogModule.Resources catalog = CatalogModule.build(jdbi, ownershipPort);
         environment.jersey().register(catalog.domains());
@@ -149,7 +157,7 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         log.info("Workflow engine: {}", engineKind);
         WorkflowModule.Resources workflow = WorkflowModule.build(
                 jdbi, lifecycle, ownershipPort, catalogReadPort, eventBus,
-                engineKind, flowableDb);
+                approverDirectory, engineKind, flowableDb);
         environment.jersey().register(workflow.transitions());
         environment.jersey().register(workflow.myTasks());
         // Flowable-движок закрывается на остановке сервиса (Managed).

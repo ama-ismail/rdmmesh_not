@@ -31,7 +31,11 @@ export function MyTasksPage() {
                   <List.Item.Meta
                     title={
                       <>
-                        <Tag color="blue">{task.requiredRole}</Tag>
+                        <Tag color="blue">
+                          {task.assignedRole
+                            ? t(`tasks.role.${task.assignedRole}`)
+                            : task.requiredRole}
+                        </Tag>
                         <Typography.Text strong>
                           {t("tasks.codeset")}: {task.codesetId}
                         </Typography.Text>

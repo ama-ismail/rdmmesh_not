@@ -22,8 +22,8 @@ import org.jdbi.v3.sqlobject.statement.SqlUpdate;
 public interface ApprovalTaskDao {
 
     String COLUMNS =
-            "id, version_id, codeset_id, domain_id, required_role, candidate_users,"
-                    + " created_at, closed_at, closed_by";
+            "id, version_id, codeset_id, domain_id, required_role, assigned_role,"
+                    + " candidate_users, created_at, closed_at, closed_by";
 
     /**
      * Открыть задачу (или переоткрыть, если уже была закрыта). UPSERT по
@@ -33,11 +33,14 @@ public interface ApprovalTaskDao {
     @SqlUpdate(
             """
             INSERT INTO workflow.approval_task
-                (version_id, codeset_id, domain_id, required_role, candidate_users)
+                (version_id, codeset_id, domain_id, required_role,
+                 assigned_role, candidate_users)
             VALUES
-                (:versionId, :codesetId, :domainId, :requiredRole, :candidates)
+                (:versionId, :codesetId, :domainId, :requiredRole,
+                 :assignedRole, :candidates)
             ON CONFLICT (version_id, required_role) DO UPDATE
                 SET candidate_users = EXCLUDED.candidate_users,
+                    assigned_role   = EXCLUDED.assigned_role,
                     created_at      = now(),
                     closed_at       = NULL,
                     closed_by       = NULL
@@ -47,6 +50,7 @@ public interface ApprovalTaskDao {
             @Bind("codesetId") UUID codesetId,
             @Bind("domainId") UUID domainId,
             @Bind("requiredRole") String requiredRole,
+            @Bind("assignedRole") String assignedRole,
             @Bind("candidates") UUID[] candidateUsers);
 
     /** Закрыть задачу указанной роли — без ошибок если открытой задачи и не было. */
@@ -97,6 +101,7 @@ public interface ApprovalTaskDao {
             UUID codesetId,
             UUID domainId,
             String requiredRole,
+            String assignedRole,
             UUID[] candidateUsers,
             Instant createdAt,
             Instant closedAt,

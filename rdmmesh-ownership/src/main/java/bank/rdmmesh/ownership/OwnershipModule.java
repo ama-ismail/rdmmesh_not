@@ -4,12 +4,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jdbi.v3.core.Jdbi;
 
 import bank.rdmmesh.api.eventbus.EventBus;
+import bank.rdmmesh.api.port.ApproverDirectoryPort;
 import bank.rdmmesh.api.port.CatalogMirrorPort;
 import bank.rdmmesh.api.port.OwnershipPort;
 import bank.rdmmesh.api.port.SigningKeyPort;
+import bank.rdmmesh.ownership.internal.PostgresApproverDirectoryPort;
 import bank.rdmmesh.ownership.internal.PostgresOwnershipPort;
 import bank.rdmmesh.ownership.internal.webhook.HmacVerifier;
 import bank.rdmmesh.ownership.internal.webhook.OwnershipWebhookService;
+import bank.rdmmesh.ownership.resource.DomainApproversResource;
+import bank.rdmmesh.ownership.resource.DomainRoleDirectoryAdminResource;
 import bank.rdmmesh.ownership.resource.OwnershipWebhookResource;
 
 /**
@@ -25,6 +29,27 @@ public final class OwnershipModule {
 
     public static OwnershipPort buildPort(Jdbi jdbi) {
         return new PostgresOwnershipPort(jdbi);
+    }
+
+    /**
+     * Справочник ролей домена для адресной маршрутизации согласования
+     * (BR-21/BR-22, handoff E17). Прокидывается в workflow (валидация
+     * submit-assignee) и в {@link #buildDirectoryResource}.
+     */
+    public static ApproverDirectoryPort buildApproverDirectoryPort(Jdbi jdbi) {
+        return new PostgresApproverDirectoryPort(jdbi);
+    }
+
+    /** REST: GET /domains/{id}/approvers (UI submit-диалог). */
+    public static DomainApproversResource buildApproversResource(
+            ApproverDirectoryPort directory) {
+        return new DomainApproversResource(directory);
+    }
+
+    /** REST: POST /admin/domain-role-directory/reload (RDM_ADMIN, полная замена). */
+    public static DomainRoleDirectoryAdminResource buildDirectoryAdminResource(
+            ApproverDirectoryPort directory) {
+        return new DomainRoleDirectoryAdminResource(directory);
     }
 
     /**

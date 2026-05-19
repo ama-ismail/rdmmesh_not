@@ -157,8 +157,22 @@ export interface ApprovalTask {
   codesetId: string;
   domainId: string;
   requiredRole: AssetRole | string;
+  // E17 / BR-21: directory-роль адресата (STEWARD | BUSINESS_OWNER); null —
+  // legacy/broadcast задача.
+  assignedRole?: "STEWARD" | "BUSINESS_OWNER" | null;
   candidateUsers: string[];
   createdAt: string;
+}
+
+// E17 / BR-21: кандидат-согласующий из справочника ролей домена.
+// ApproverDirectoryPort.Approver — Java record без @JsonProperty → camelCase.
+export type DirectoryRole = "STEWARD" | "BUSINESS_OWNER";
+
+export interface Approver {
+  omUserId: string;
+  username: string;
+  displayName?: string | null;
+  role: DirectoryRole;
 }
 
 // ─── Auth ──────────────────────────────────────────────────────────────────────

@@ -48,6 +48,7 @@ public final class MyTasksResource {
                 row.codesetId(),
                 row.domainId(),
                 row.requiredRole(),
+                row.assignedRole(),
                 row.candidateUsers() == null ? List.of() : List.of(row.candidateUsers()),
                 OffsetDateTime.ofInstant(row.createdAt(), ZoneOffset.UTC));
     }
@@ -58,6 +59,7 @@ public final class MyTasksResource {
             UUID codesetId,
             UUID domainId,
             String requiredRole,
+            String assignedRole,
             List<UUID> candidateUsers,
             OffsetDateTime createdAt) {}
 }

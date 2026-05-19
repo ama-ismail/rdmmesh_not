@@ -304,7 +304,11 @@
     "createdAt": "Создана",
     "version": "Версия",
     "codeset": "Справочник",
-    "open": "Открыть"
+    "open": "Открыть",
+    "role": {
+      "STEWARD": "Steward",
+      "BUSINESS_OWNER": "Бизнес-владелец"
+    }
   },
   "workflow": {
     "success": "Переход выполнен",
@@ -322,6 +326,20 @@
       "commentPlaceholder": "Опишите причину reject'а — увидит автор draft'а",
       "commentRequired": "Комментарий обязателен",
       "commentTooShort": "Минимум 3 символа"
+    },
+    "submit": {
+      "title": "Отправить на согласование",
+      "ok": "Отправить",
+      "domain": "Домен",
+      "steward": "Стюард (Steward approve)",
+      "owner": "Бизнес-владелец (Owner approve)",
+      "stewardPlaceholder": "Выберите стюарда домена",
+      "ownerPlaceholder": "Выберите бизнес-владельца домена",
+      "required": "Обязательное поле",
+      "empty": "Нет кандидатов в справочнике ролей домена",
+      "noDomain": "Домен CodeSet'а ещё не загружен — повторите позже",
+      "commentLabel": "Комментарий (необязательно)",
+      "commentPlaceholder": "Контекст для согласующих"
     }
   }
 }

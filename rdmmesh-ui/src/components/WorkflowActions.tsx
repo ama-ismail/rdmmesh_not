@@ -1,21 +1,24 @@
 import { useState } from "react";
-import { Button, Form, Input, Modal, Space, App as AntApp } from "antd";
+import { Alert, Button, Form, Input, Modal, Select, Space, App as AntApp } from "antd";
 import { ArrowRightOutlined, CheckCircleOutlined, RollbackOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiMutations, type TransitionRequest } from "@/api/endpoints";
+import { api, apiMutations, type TransitionRequest } from "@/api/endpoints";
 import { qk } from "@/api/queryClient";
 import { ApiError } from "@/api/client";
-import type { CodeSetVersion, VersionStatus } from "@/api/types";
+import type { Approver, CodeSetVersion, VersionStatus } from "@/api/types";
 
 interface Props {
   version: CodeSetVersion;
+  // E17 / BR-21: домен CodeSet'а — нужен для submit-диалога (выбор
+  // согласующих из справочника ролей домена). VersionPage его уже грузит.
+  domainId?: string | null;
 }
 
 // Какие действия доступны из какого статуса. Совпадает с матрицей StateMachine'а
 // в backend (handoff E5 §1.3 / E6 §1.6). Backend всё равно валидирует — это hint UI.
-//   - submit: DRAFT → IN_REVIEW
+//   - submit: DRAFT → IN_REVIEW (E17: с выбором согласующих)
 //   - steward_approve: IN_REVIEW → STEWARD_APPROVED
 //   - steward_reject: IN_REVIEW → DRAFT (comment обязателен)
 //   - owner_approve: STEWARD_APPROVED → OWNER_APPROVED (backend сразу auto-publish'ит)
@@ -76,12 +79,22 @@ const ACTIONS: Partial<Record<VersionStatus, Partial<Record<Action, ActionDef>>>
   // PUBLISHED/DEPRECATED/REJECTED — terminal, кнопок нет.
 };
 
-export function WorkflowActions({ version }: Props) {
+function approverLabel(a: Approver): string {
+  return a.displayName ? `${a.displayName} (${a.username})` : a.username;
+}
+
+export function WorkflowActions({ version, domainId }: Props) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { message } = AntApp.useApp();
   const [pending, setPending] = useState<{ action: Action; def: ActionDef } | null>(null);
+  const [submitOpen, setSubmitOpen] = useState(false);
   const [form] = Form.useForm<{ comment: string }>();
+  const [submitForm] = Form.useForm<{
+    steward_om_user_id: string;
+    owner_om_user_id: string;
+    comment?: string;
+  }>();
 
   const transition = useMutation({
     mutationFn: (req: TransitionRequest) => apiMutations.transition(version.id, req),
@@ -95,12 +108,27 @@ export function WorkflowActions({ version }: Props) {
       queryClient.invalidateQueries({ queryKey: qk.codesets.one(version.codeset_id) });
       queryClient.invalidateQueries({ queryKey: qk.tasks.my() });
       setPending(null);
+      setSubmitOpen(false);
       form.resetFields();
+      submitForm.resetFields();
     },
     onError: (e: unknown) => {
       const msg = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
       message.error(msg);
     },
+  });
+
+  // E17 / BR-21: кандидаты-согласующие домена. Грузим лениво — только когда
+  // открыт submit-диалог и известен domainId.
+  const stewards = useQuery({
+    queryKey: qk.domains.approvers(domainId ?? "_pending", "STEWARD"),
+    queryFn: () => api.listApprovers(domainId as string, "STEWARD"),
+    enabled: submitOpen && !!domainId,
+  });
+  const owners = useQuery({
+    queryKey: qk.domains.approvers(domainId ?? "_pending", "BUSINESS_OWNER"),
+    queryFn: () => api.listApprovers(domainId as string, "BUSINESS_OWNER"),
+    enabled: submitOpen && !!domainId,
   });
 
   const actions = ACTIONS[version.status] ?? {};
@@ -111,6 +139,10 @@ export function WorkflowActions({ version }: Props) {
   }
 
   const onClick = (action: Action, def: ActionDef) => {
+    if (action === "submit") {
+      setSubmitOpen(true);
+      return;
+    }
     if (def.needsComment) {
       setPending({ action, def });
       return;
@@ -128,6 +160,23 @@ export function WorkflowActions({ version }: Props) {
     });
   };
 
+  const onSubmitForApproval = async () => {
+    const values = await submitForm.validateFields();
+    transition.mutate({
+      to: "IN_REVIEW",
+      expected_status: version.status,
+      comment: values.comment?.trim() || undefined,
+      assignee: {
+        domain_id: domainId as string,
+        steward_om_user_id: values.steward_om_user_id,
+        owner_om_user_id: values.owner_om_user_id,
+      },
+    });
+  };
+
+  const toOptions = (list?: Approver[]) =>
+    (list ?? []).map((a) => ({ value: a.omUserId, label: approverLabel(a) }));
+
   return (
     <>
       <Space wrap>
@@ -138,12 +187,81 @@ export function WorkflowActions({ version }: Props) {
             danger={def.variant === "danger"}
             icon={def.icon}
             onClick={() => onClick(action, def)}
-            loading={transition.isPending && (!pending || pending.action === action)}
+            loading={
+              transition.isPending &&
+              (action === "submit"
+                ? submitOpen
+                : !pending || pending.action === action)
+            }
           >
             {t(def.i18nKey)}
           </Button>
         ))}
       </Space>
+
+      {/* E17 / BR-21: submit с выбором согласующих (домен → steward + business owner). */}
+      <Modal
+        open={submitOpen}
+        title={t("workflow.submit.title")}
+        okText={t("workflow.submit.ok")}
+        cancelText={t("workflow.modal.cancel")}
+        confirmLoading={transition.isPending}
+        okButtonProps={{ disabled: !domainId }}
+        onOk={() => void onSubmitForApproval()}
+        onCancel={() => {
+          setSubmitOpen(false);
+          submitForm.resetFields();
+        }}
+        destroyOnClose
+      >
+        {!domainId ? (
+          <Alert type="warning" showIcon message={t("workflow.submit.noDomain")} />
+        ) : (
+          <Form form={submitForm} layout="vertical" preserve={false}>
+            <Form.Item label={t("workflow.submit.domain")}>
+              <Input value={domainId} disabled />
+            </Form.Item>
+            <Form.Item
+              label={t("workflow.submit.steward")}
+              name="steward_om_user_id"
+              rules={[{ required: true, message: t("workflow.submit.required") }]}
+            >
+              <Select
+                showSearch
+                optionFilterProp="label"
+                loading={stewards.isLoading}
+                placeholder={t("workflow.submit.stewardPlaceholder")}
+                options={toOptions(stewards.data)}
+                notFoundContent={
+                  stewards.isLoading ? null : t("workflow.submit.empty")
+                }
+              />
+            </Form.Item>
+            <Form.Item
+              label={t("workflow.submit.owner")}
+              name="owner_om_user_id"
+              rules={[{ required: true, message: t("workflow.submit.required") }]}
+            >
+              <Select
+                showSearch
+                optionFilterProp="label"
+                loading={owners.isLoading}
+                placeholder={t("workflow.submit.ownerPlaceholder")}
+                options={toOptions(owners.data)}
+                notFoundContent={owners.isLoading ? null : t("workflow.submit.empty")}
+              />
+            </Form.Item>
+            <Form.Item label={t("workflow.submit.commentLabel")} name="comment">
+              <Input.TextArea
+                rows={3}
+                maxLength={1000}
+                showCount
+                placeholder={t("workflow.submit.commentPlaceholder")}
+              />
+            </Form.Item>
+          </Form>
+        )}
+      </Modal>
 
       <Modal
         open={!!pending}

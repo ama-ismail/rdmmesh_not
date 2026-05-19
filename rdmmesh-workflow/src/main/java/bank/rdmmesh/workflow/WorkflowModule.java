@@ -43,7 +43,12 @@ public final class WorkflowModule {
     /** JDBC-координаты для собственного пула Flowable (только при FLOWABLE). */
     public record FlowableDbConfig(String jdbcUrl, String user, String password) {}
 
-    /** Дефолт: enum-движок (обратная совместимость, нулевой риск). */
+    /**
+     * Дефолт: enum-движок, без справочника согласующих (обратная
+     * совместимость — submit без assignee = legacy broadcast). Используется
+     * ITs (AtomicRollbackIT/FlowableWorkflowIT), которые вызывают service
+     * напрямую и не задают assignee.
+     */
     public static Resources build(
             Jdbi jdbi,
             VersionLifecyclePort lifecycle,
@@ -51,12 +56,14 @@ public final class WorkflowModule {
             CatalogReadPort catalog,
             EventBus eventBus) {
         return build(jdbi, lifecycle, ownership, catalog, eventBus,
-                EngineKind.ENUM, null);
+                null, EngineKind.ENUM, null);
     }
 
     /**
-     * Выбор движка. {@code flowableDb} обязателен только при
-     * {@link EngineKind#FLOWABLE} (иначе игнорируется).
+     * Выбор движка + справочник согласующих (E17, BR-21). {@code flowableDb}
+     * обязателен только при {@link EngineKind#FLOWABLE}; {@code approverDirectory}
+     * может быть {@code null} — тогда адресная маршрутизация submit'а отключена
+     * (legacy broadcast по rdm_asset_ownership).
      */
     public static Resources build(
             Jdbi jdbi,
@@ -64,11 +71,13 @@ public final class WorkflowModule {
             OwnershipPort ownership,
             CatalogReadPort catalog,
             EventBus eventBus,
+            bank.rdmmesh.api.port.ApproverDirectoryPort approverDirectory,
             EngineKind kind,
             FlowableDbConfig flowableDb) {
 
         WorkflowService service =
-                new WorkflowService(jdbi, lifecycle, ownership, catalog, eventBus);
+                new WorkflowService(jdbi, lifecycle, ownership, catalog, eventBus,
+                        approverDirectory);
 
         WorkflowEngine engine;
         FlowableEngineManager manager = null;
