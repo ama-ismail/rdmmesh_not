@@ -56,6 +56,11 @@
             <groupId>bank.rdmmesh</groupId>
             <artifactId>rdmmesh-audit</artifactId>
         </dependency>
+        <!-- E18 (ADR-0010): RDM_ADMIN-facing операции. См. rdmmesh-admin/pom.xml. -->
+        <dependency>
+            <groupId>bank.rdmmesh</groupId>
+            <artifactId>rdmmesh-admin</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>io.dropwizard</groupId>

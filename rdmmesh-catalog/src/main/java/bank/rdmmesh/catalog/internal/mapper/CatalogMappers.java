@@ -40,7 +40,10 @@ public final class CatalogMappers {
     public static Domain toDomain(DomainRow row) {
         Domain d = new Domain();
         d.setId(row.id().toString());
-        d.setOmDomainId(row.omDomainId().toString());
+        // E18 (ADR-0011): RDM-локальные домены (master=RDM) не имеют om_domain_id —
+        // он NULL до явной линковки с OM. Старый маппер звал .toString() безусловно
+        // и падал NPE на таких строках, валя GET /domains для всех пользователей.
+        d.setOmDomainId(row.omDomainId() == null ? null : row.omDomainId().toString());
         d.setName(row.name());
         d.setDisplayName(row.displayName());
         d.setDescription(row.description());

@@ -22,6 +22,11 @@
     <module>rdmmesh-identity</module>
     <module>rdmmesh-ownership</module>
     <module>rdmmesh-audit</module>
+    <!-- E18 (ADR-0010): RDM_ADMIN-facing операции (domain CRUD, ownership
+         assignment, codeset rename/delete, resolution_task) живут в собственном
+         bounded context. Не размазываем admin-логику по catalog/ownership/workflow,
+         чтобы ArchUnit-правила изоляции оставались чистыми. -->
+    <module>rdmmesh-admin</module>
     <module>rdmmesh-app</module>
   </modules>
 
@@ -277,6 +282,12 @@
       <dependency>
         <groupId>bank.rdmmesh</groupId>
         <artifactId>rdmmesh-audit</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <!-- E18 (ADR-0011): RDM_ADMIN-facing bounded context. -->
+      <dependency>
+        <groupId>bank.rdmmesh</groupId>
+        <artifactId>rdmmesh-admin</artifactId>
         <version>${project.version}</version>
       </dependency>
 

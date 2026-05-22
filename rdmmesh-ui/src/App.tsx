@@ -9,6 +9,7 @@ import { CodeSetPage } from "@/pages/CodeSetPage";
 import { DomainPage } from "@/pages/DomainPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { AuditPage } from "@/pages/AuditPage";
+import { AdminDomainsPage } from "@/pages/AdminDomainsPage";
 import { MyTasksPage } from "@/pages/MyTasksPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { SubscriptionsPage } from "@/pages/SubscriptionsPage";
@@ -33,6 +34,7 @@ export function App() {
           <Route path="/codesets/:codesetId" element={<CodeSetPage />} />
           <Route path="/versions/:versionId" element={<VersionPage />} />
           <Route path="/tasks" element={<MyTasksPage />} />
+          <Route path="/admin/domains" element={<AdminDomainsPage />} />
           <Route path="/admin/subscriptions" element={<SubscriptionsPage />} />
           <Route path="/admin/audit" element={<AuditPage />} />
           <Route path="*" element={<NotFoundPage />} />

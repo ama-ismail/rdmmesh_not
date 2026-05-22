@@ -9,7 +9,8 @@
     "logout": "Выход",
     "admin": "Админ",
     "subscriptions": "Subscriptions",
-    "audit": "Audit log"
+    "audit": "Audit log",
+    "adminDomains": "Домены (admin)"
   },
   "common": {
     "loading": "Загрузка...",

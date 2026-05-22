@@ -2,7 +2,13 @@ import { useMemo } from "react";
 import { Layout, Menu, Space, Typography, type MenuProps } from "antd";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ApiOutlined, AppstoreOutlined, FileSearchOutlined, ProfileOutlined } from "@ant-design/icons";
+import {
+  ApiOutlined,
+  AppstoreOutlined,
+  FileSearchOutlined,
+  ProfileOutlined,
+  ClusterOutlined,
+} from "@ant-design/icons";
 
 import { useAuth } from "@/auth/AuthContext";
 import { LangSwitcher } from "./LangSwitcher";
@@ -22,13 +28,15 @@ export function AppLayout() {
   const isAuditor = baseRoles.includes("RDM_AUDITOR");
   const canViewAdmin = isAdmin || isAuditor;
 
-  const selected = pathname.startsWith("/admin/subscriptions")
-    ? "subscriptions"
-    : pathname.startsWith("/admin/audit")
-      ? "audit"
-      : pathname.startsWith("/tasks")
-        ? "tasks"
-        : "catalog";
+  const selected = pathname.startsWith("/admin/domains")
+    ? "admin-domains"
+    : pathname.startsWith("/admin/subscriptions")
+      ? "subscriptions"
+      : pathname.startsWith("/admin/audit")
+        ? "audit"
+        : pathname.startsWith("/tasks")
+          ? "tasks"
+          : "catalog";
 
   const items: MenuProps["items"] = useMemo(() => {
     const main: MenuProps["items"] = [
@@ -46,6 +54,11 @@ export function AppLayout() {
     if (!canViewAdmin) return main;
     const adminChildren: NonNullable<MenuProps["items"]> = [];
     if (isAdmin) {
+      adminChildren.push({
+        key: "admin-domains",
+        icon: <ClusterOutlined />,
+        label: <Link to="/admin/domains">{t("nav.adminDomains")}</Link>,
+      });
       adminChildren.push({
         key: "subscriptions",
         icon: <ApiOutlined />,

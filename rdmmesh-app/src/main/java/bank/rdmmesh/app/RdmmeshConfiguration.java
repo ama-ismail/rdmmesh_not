@@ -106,13 +106,15 @@ public final class RdmmeshConfiguration extends Configuration {
                 "classpath:db/migration/publishing",
                 "classpath:db/migration/identity",
                 "classpath:db/migration/ownership",
-                "classpath:db/migration/audit");
+                "classpath:db/migration/audit",
+                // E18 (ADR-0010): admin-bounded context (resolution_task + future).
+                "classpath:db/migration/admin");
 
         /** All schemas Flyway is allowed to manage (created if missing). */
         @JsonProperty("schemas")
         @NotNull
         private List<String> schemas = List.of(
-                "catalog", "authoring", "workflow", "publishing", "identity", "ownership", "audit");
+                "catalog", "authoring", "workflow", "publishing", "identity", "ownership", "audit", "admin");
 
         /** Schema that hosts {@code flyway_schema_history}. */
         @JsonProperty("defaultSchema")

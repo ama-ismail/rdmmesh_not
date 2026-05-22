@@ -127,6 +127,18 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         environment.jersey().register(catalog.codeSets());
         environment.jersey().register(catalog.schemas());
 
+        // E18 (ADR-0011): admin-facing endpoints под /api/v1/admin/...
+        // (domain CRUD/link/unlink, ownership assign/pin, codeset rename/delete,
+        // user search, resolution_task /my+resolve). Все методы под
+        // @RolesAllowed("RDM_ADMIN") — dropwizard-auth уже зарегистрирован выше.
+        bank.rdmmesh.admin.AdminModule.Resources adminResources =
+                bank.rdmmesh.admin.AdminModule.build(jdbi);
+        environment.jersey().register(adminResources.domains());
+        environment.jersey().register(adminResources.ownership());
+        environment.jersey().register(adminResources.codeSets());
+        environment.jersey().register(adminResources.userSearch());
+        environment.jersey().register(adminResources.tasks());
+
         CatalogReadPort catalogReadPort = CatalogModule.buildReadPort(jdbi);
         // EventBus создаётся раньше: E14 round 11 — ClosureAdminResource
         // (authoring) эмитит ClosureRebuildDomainEvent, поэтому шина нужна

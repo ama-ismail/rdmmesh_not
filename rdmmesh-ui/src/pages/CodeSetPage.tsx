@@ -1,12 +1,29 @@
-import { Breadcrumb, Button, Card, Descriptions, List, Space, Tag, Tooltip, Typography, App as AntApp } from "antd";
+import { useState } from "react";
+import {
+  Breadcrumb,
+  Button,
+  Card,
+  Descriptions,
+  Form,
+  Input,
+  List,
+  Modal,
+  Popconfirm,
+  Space,
+  Tag,
+  Tooltip,
+  Typography,
+  App as AntApp,
+} from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { api, apiMutations } from "@/api/endpoints";
+import { api, apiMutations, adminMutations } from "@/api/endpoints";
 import { qk } from "@/api/queryClient";
 import { useApi } from "@/api/useApi";
+import { useAuth } from "@/auth/AuthContext";
 import { ApiError } from "@/api/client";
 import { Loader } from "@/components/Loader";
 import { StatusTag } from "@/components/StatusTag";
@@ -29,11 +46,39 @@ export function CodeSetPage() {
   const queryClient = useQueryClient();
   const { message } = AntApp.useApp();
 
+  const { baseRoles } = useAuth();
+  const isAdmin = baseRoles.includes("RDM_ADMIN");
+
   const codeset = useApi(() => api.getCodeSet(id), qk.codesets.one(id));
   const schema = useApi(() => api.getActiveSchema(id), qk.codesets.schema(id));
   const versions = useApi(() => api.listVersionsByCodeSet(id), qk.versions.byCodeset(id));
 
   const openVersion = versions.data?.find((v) => OPEN_STATUSES.has(v.status));
+
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameForm] = Form.useForm();
+
+  const rename = useMutation({
+    mutationFn: (newName: string) => adminMutations.renameCodeset(id, newName, true),
+    onSuccess: () => {
+      message.success("Codeset переименован");
+      setRenameOpen(false);
+      renameForm.resetFields();
+      queryClient.invalidateQueries({ queryKey: qk.codesets.one(id) });
+      queryClient.invalidateQueries({ queryKey: qk.codesets.byDomain(codeset.data?.domain_id ?? "") });
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => adminMutations.deleteCodeset(id, false),
+    onSuccess: () => {
+      message.success("Codeset удалён (soft-delete)");
+      queryClient.invalidateQueries({ queryKey: qk.codesets.byDomain(codeset.data?.domain_id ?? "") });
+      navigate(`/domains/${codeset.data?.domain_id}`);
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
 
   const createDraft = useMutation({
     mutationFn: () => apiMutations.createDraft(id, {}),
@@ -66,7 +111,28 @@ export function CodeSetPage() {
         ]}
       />
 
-      <Card title={t("catalog.codeset")} style={{ marginBottom: 16 }}>
+      <Card
+        title={t("catalog.codeset")}
+        style={{ marginBottom: 16 }}
+        extra={
+          isAdmin && (
+            <Space>
+              <Button size="small" onClick={() => setRenameOpen(true)}>
+                Rename
+              </Button>
+              <Popconfirm
+                title="Удалить codeset?"
+                description="Soft-delete; published-версии при их наличии заблокируют операцию."
+                onConfirm={() => remove.mutate()}
+              >
+                <Button size="small" danger>
+                  Delete
+                </Button>
+              </Popconfirm>
+            </Space>
+          )
+        }
+      >
         <Loader {...codeset}>
           {(c) => (
             <Descriptions column={1} size="small">
@@ -177,6 +243,39 @@ export function CodeSetPage() {
           )}
         </Loader>
       </Card>
+
+      <Modal
+        title="Переименовать codeset"
+        open={renameOpen}
+        onCancel={() => setRenameOpen(false)}
+        destroyOnClose
+        onOk={() => renameForm.submit()}
+        confirmLoading={rename.isPending}
+      >
+        <Form
+          form={renameForm}
+          layout="vertical"
+          initialValues={{ new_name: codeset.data?.name ?? "" }}
+          onFinish={(v) => rename.mutate(v.new_name)}
+        >
+          <Typography.Paragraph type="secondary">
+            Старое имя сохраняется в aliases для ingestion-коннектора OM.
+          </Typography.Paragraph>
+          <Form.Item
+            name="new_name"
+            label="Новое name (snake_case)"
+            rules={[
+              { required: true },
+              {
+                pattern: /^[a-z][a-z0-9_]{0,63}$/,
+                message: "lower snake_case, ≤64 chars",
+              },
+            ]}
+          >
+            <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
     </>
   );
 }

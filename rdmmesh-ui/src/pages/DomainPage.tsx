@@ -1,19 +1,56 @@
-import { Breadcrumb, Card, List, Tag, Typography } from "antd";
+import { useState } from "react";
+import {
+  Breadcrumb,
+  Button,
+  Card,
+  Form,
+  Input,
+  List,
+  Modal,
+  Select,
+  Tag,
+  Typography,
+  message,
+} from "antd";
 import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { api } from "@/api/endpoints";
+import { api, apiMutations, type CreateCodeSetRequest } from "@/api/endpoints";
 import { qk } from "@/api/queryClient";
 import { useApi } from "@/api/useApi";
+import { useAuth } from "@/auth/AuthContext";
 import { Loader } from "@/components/Loader";
+import { DomainOwnershipPanel } from "@/components/DomainOwnershipPanel";
 
 export function DomainPage() {
   const { t } = useTranslation();
   const { domainId } = useParams<{ domainId: string }>();
   const id = domainId!;
+  const { baseRoles } = useAuth();
+  const isAdmin = baseRoles.includes("RDM_ADMIN");
+  const canCreateCodeset =
+    isAdmin ||
+    baseRoles.includes("RDM_AUTHOR") ||
+    baseRoles.includes("RDM_SCHEMA_DESIGNER");
+
+  const queryClient = useQueryClient();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [form] = Form.useForm();
 
   const domain = useApi(() => api.getDomain(id), qk.domains.one(id));
   const codesets = useApi(() => api.listCodeSetsByDomain(id), qk.codesets.byDomain(id));
+
+  const createCodeSet = useMutation({
+    mutationFn: (body: CreateCodeSetRequest) => apiMutations.createCodeSet(id, body),
+    onSuccess: () => {
+      message.success("Справочник создан");
+      setCreateOpen(false);
+      form.resetFields();
+      queryClient.invalidateQueries({ queryKey: qk.codesets.byDomain(id) });
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
 
   return (
     <>
@@ -49,7 +86,18 @@ export function DomainPage() {
         </Loader>
       </Card>
 
-      <Card title={t("catalog.codesets")}>
+      {isAdmin && <DomainOwnershipPanel domainId={id} />}
+
+      <Card
+        title={t("catalog.codesets")}
+        extra={
+          canCreateCodeset && (
+            <Button type="primary" onClick={() => setCreateOpen(true)}>
+              Создать справочник
+            </Button>
+          )
+        }
+      >
         <Loader {...codesets}>
           {(items) => (
             <List
@@ -83,6 +131,62 @@ export function DomainPage() {
           )}
         </Loader>
       </Card>
+
+      <Modal
+        title="Создать справочник"
+        open={createOpen}
+        onCancel={() => setCreateOpen(false)}
+        destroyOnClose
+        onOk={() => form.submit()}
+        confirmLoading={createCodeSet.isPending}
+      >
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{ hierarchy_mode: "NONE" }}
+          onFinish={(v) =>
+            createCodeSet.mutate({
+              name: v.name,
+              display_name: v.display_name || null,
+              description: v.description || null,
+              hierarchy_mode: v.hierarchy_mode,
+            })
+          }
+        >
+          <Typography.Paragraph type="secondary">
+            Ключ по умолчанию — одиночный строковый код. Структуру атрибутов
+            (JSON Schema) и композитные ключи можно настроить позже.
+          </Typography.Paragraph>
+          <Form.Item
+            name="name"
+            label="Code (snake_case)"
+            rules={[
+              { required: true, message: "Required" },
+              {
+                pattern: /^[a-z][a-z0-9_]{0,63}$/,
+                message: "lower snake_case, ≤64 chars",
+              },
+            ]}
+          >
+            <Input placeholder="ifrs9_stages" />
+          </Form.Item>
+          <Form.Item name="display_name" label="Display name">
+            <Input placeholder="IFRS9 Stages" />
+          </Form.Item>
+          <Form.Item name="description" label="Description">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="hierarchy_mode" label="Hierarchy">
+            <Select
+              options={[
+                { value: "NONE", label: "NONE (плоский)" },
+                { value: "INTRA_CODESET", label: "INTRA_CODESET (дерево внутри)" },
+                { value: "CROSS_CODESET", label: "CROSS_CODESET (ссылки между справочниками)" },
+              ]}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </>
   );
 }

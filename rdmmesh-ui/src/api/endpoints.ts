@@ -235,7 +235,24 @@ export interface CreateDraftRequest {
   initial_items?: CodeItem[];
 }
 
+// POST /codesets/by-domain/{domainId} — создание справочника (Schema Designer /
+// Author / Admin). key_spec/initial_schema опциональны: backend по умолчанию
+// делает одиночный строковый ключ "code" и пустую схему.
+export interface CreateCodeSetRequest {
+  name: string;
+  display_name?: string | null;
+  description?: string | null;
+  hierarchy_mode?: "NONE" | "INTRA_CODESET" | "CROSS_CODESET" | null;
+}
+
 export const apiMutations = {
+  // E18 — создание справочника в домене (catalog POST /codesets/by-domain/{id}).
+  createCodeSet: (domainId: string, body: CreateCodeSetRequest) =>
+    apiFetch<CodeSet>(`/codesets/by-domain/${domainId}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
   // E11.2a — DRAFT lifecycle + workflow transitions
   createDraft: (codesetId: string, body: CreateDraftRequest = {}) =>
     apiFetch<CodeSetVersion>(`/versions/by-codeset/${codesetId}`, {
@@ -312,6 +329,167 @@ export const apiMutations = {
   rebuildClosure: (versionId: string) =>
     apiFetch<ClosureRebuildResult>(`/versions/${versionId}/closure/rebuild`, {
       method: "POST",
+    }),
+};
+
+// ─── E18 (ADR-0011) — Admin domain CRUD, ownership, codeset rename/delete,
+// user search, resolution tasks. Все эндпоинты под @RolesAllowed("RDM_ADMIN") ─
+
+export interface AdminDomainView {
+  id: string;
+  om_domain_id: string | null;
+  name: string;
+  display_name: string | null;
+  description: string | null;
+  label_ru: string | null;
+  label_en: string | null;
+  tags: string[];
+  master: "OM" | "RDM" | "LINKED";
+  local_overrides: string;
+  external_refs: string;
+  last_om_sync_at: string | null;
+  deleted_in_om_at: string | null;
+  active_codeset_count: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface AdminOwnershipView {
+  id: string;
+  asset_id: string;
+  asset_type: "DOMAIN" | "CODESET";
+  om_user_id: string;
+  role: "OWNER" | "STEWARD" | "EXPERT" | "APPROVER";
+  origin: "OM" | "RDM";
+  pinned_local: boolean;
+  is_provisional: boolean;
+  assigned_at: string;
+  assigned_by_user_id: string | null;
+}
+
+export interface AdminUserView {
+  om_user_id: string;
+  username: string;
+  display_name: string | null;
+  email: string | null;
+}
+
+export interface AdminTaskView {
+  id: string;
+  task_type: "DOMAIN_LINKAGE" | "DOMAIN_DELETED_IN_OM" | "OWNERSHIP_OM_REMOVAL_CONFLICT";
+  source_event_id: string;
+  related_domain_id: string | null;
+  payload: string;
+  status: "PENDING" | "RESOLVED";
+  created_at: string;
+}
+
+export interface CreateDomainRequest {
+  name: string;
+  om_domain_id?: string | null;
+  display_name?: string | null;
+  description?: string | null;
+  label_ru?: string | null;
+  label_en?: string | null;
+  tags?: string[] | null;
+}
+
+export interface PatchDomainRequest {
+  display_name?: string | null;
+  description?: string | null;
+  label_ru?: string | null;
+  label_en?: string | null;
+  tags?: string[] | null;
+}
+
+export interface AssignOwnershipRequest {
+  om_user_id: string;
+  role: "OWNER" | "STEWARD" | "EXPERT" | "APPROVER";
+  pinned_local?: boolean;
+}
+
+export const adminApi = {
+  // Domain CRUD
+  listDomains: () => apiFetch<AdminDomainView[]>("/admin/domains"),
+  getDomain: (id: string) => apiFetch<AdminDomainView>(`/admin/domains/${id}`),
+
+  // Ownership
+  listDomainOwnership: (id: string) =>
+    apiFetch<AdminOwnershipView[]>(`/admin/domains/${id}/ownership`),
+  listCodesetOwnership: (id: string) =>
+    apiFetch<AdminOwnershipView[]>(`/admin/codesets/${id}/ownership`),
+
+  // User search
+  searchUsers: (q: string, limit = 20) =>
+    apiFetch<AdminUserView[]>(
+      `/admin/users/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+
+  // Tasks
+  myAdminTasks: () => apiFetch<AdminTaskView[]>("/admin/tasks/my"),
+};
+
+export const adminMutations = {
+  createDomain: (body: CreateDomainRequest) =>
+    apiFetch<AdminDomainView>("/admin/domains", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  patchDomain: (id: string, body: PatchDomainRequest) =>
+    apiFetch<AdminDomainView>(`/admin/domains/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  renameDomain: (id: string, newName: string) =>
+    apiFetch<AdminDomainView>(`/admin/domains/${id}:rename`, {
+      method: "POST",
+      body: JSON.stringify({ new_name: newName }),
+    }),
+  deleteDomain: (id: string) =>
+    apiFetch<void>(`/admin/domains/${id}`, { method: "DELETE" }),
+  linkDomainToOm: (id: string, omDomainId: string) =>
+    apiFetch<AdminDomainView>(`/admin/domains/${id}:link-to-om`, {
+      method: "POST",
+      body: JSON.stringify({ om_domain_id: omDomainId }),
+    }),
+  unlinkDomainFromOm: (id: string) =>
+    apiFetch<AdminDomainView>(`/admin/domains/${id}:unlink-from-om`, {
+      method: "POST",
+      body: "{}",
+    }),
+
+  assignDomainOwnership: (domainId: string, body: AssignOwnershipRequest) =>
+    apiFetch<AdminOwnershipView>(`/admin/domains/${domainId}/ownership`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  patchOwnership: (id: string, pinnedLocal: boolean) =>
+    apiFetch<AdminOwnershipView>(`/admin/ownership/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ pinned_local: pinnedLocal }),
+    }),
+  deleteOwnership: (id: string) =>
+    apiFetch<void>(`/admin/ownership/${id}`, { method: "DELETE" }),
+
+  renameCodeset: (id: string, newName: string, keepAlias = true) =>
+    apiFetch<void>(`/admin/codesets/${id}:rename`, {
+      method: "POST",
+      body: JSON.stringify({
+        new_name: newName,
+        keep_alias_for_ingestion: keepAlias,
+      }),
+    }),
+  deleteCodeset: (id: string, forceArchive = false) =>
+    apiFetch<void>(
+      `/admin/codesets/${id}${forceArchive ? "?force_archive=true" : ""}`,
+      { method: "DELETE" },
+    ),
+
+  resolveAdminTask: (id: string, action: string, notes?: string) =>
+    apiFetch<void>(`/admin/tasks/${id}:resolve`, {
+      method: "POST",
+      body: JSON.stringify({ action, notes: notes ?? null }),
     }),
 };
 
