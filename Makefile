@@ -8,6 +8,15 @@ MVN          ?= ./bin/mvn
 COMPOSE_FILE ?= docker/docker-compose.yml
 COMPOSE      ?= docker compose -f $(COMPOSE_FILE)
 
+# Node разработчики на этой машине ставят через nvm (~/.nvm/versions/node/<v>/bin).
+# /bin/sh, которым make исполняет рецепты, не читает ~/.bashrc, поэтому без явной
+# подмеси PATH цели `ui*` падают с "npm: not found". Берём свежайшую версию node
+# из nvm, если она есть; для системного node-апта блок просто no-op.
+NVM_NODE_BIN := $(lastword $(sort $(wildcard $(HOME)/.nvm/versions/node/*/bin)))
+ifneq ($(NVM_NODE_BIN),)
+export PATH := $(NVM_NODE_BIN):$(PATH)
+endif
+
 .PHONY: help
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_.-]+:.*?## / {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -83,6 +92,10 @@ kc-admin: ## Open Keycloak admin console URL (login admin/admin)
 .PHONY: ui
 ui: ## Run the React dev server
 	cd rdmmesh-ui && npm run dev
+
+.PHONY: seed-credit-risk
+seed-credit-risk: ## Seed Credit Risk demo (E19): credit_risk domain + rating_scale + delinquency_buckets + rating_transition_matrix (5x5 for 1Y, customer's matrix P with implicit D column). Idempotent by SFX. Requires `make up` first.
+	bash scripts/seed-credit-risk.sh
 
 .PHONY: clean
 clean: ## Remove build artifacts (Maven target/ and Vite dist/)

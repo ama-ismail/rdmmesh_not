@@ -338,4 +338,8 @@ export interface BulkImportResult {
   rows_updated?: number | null;
   rows_unchanged?: number | null;
   errors?: BulkImportError[] | null;
+  // E19 Commit 3 — pivot import: сколько ячеек absorbing-колонки (residual)
+  // дописано парсером при IMPLICIT_DEFAULT. Backend record-field — camelCase,
+  // т.к. в проекте нет глобального snake_case naming-strategy. 0 для long-формата.
+  implicitDefaultAdded?: number | null;
 }

@@ -243,6 +243,8 @@ export interface CreateCodeSetRequest {
   display_name?: string | null;
   description?: string | null;
   hierarchy_mode?: "NONE" | "INTRA_CODESET" | "CROSS_CODESET" | null;
+  key_spec?: Record<string, unknown> | null;
+  initial_schema?: Record<string, unknown> | null;
 }
 
 export const apiMutations = {
@@ -312,6 +314,33 @@ export const apiMutations = {
       },
       body: file,
     }),
+
+  // E19 Commit 3 — pivot-режим XLSX-импорта для матриц миграций. Тот же
+  // endpoint /items/bulk-xlsx, но с query-параметрами ?layout=pivot&horizon=...
+  // &row_residual_policy=... Backend раскладывает квадратную матрицу в triples
+  // и (опционально) дописывает absorbing-колонку из невязки.
+  bulkXlsxPivot: (
+    versionId: string,
+    file: Blob,
+    opts: { horizon: string; rowResidualPolicy: "implicit_default" | "strict" },
+  ) => {
+    const qs = new URLSearchParams({
+      layout: "pivot",
+      horizon: opts.horizon,
+      row_residual_policy: opts.rowResidualPolicy,
+    }).toString();
+    return apiFetch<BulkImportResult>(
+      `/versions/${versionId}/items/bulk-xlsx?${qs}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type":
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+        body: file,
+      },
+    );
+  },
 
   // E11.2c — Subscriptions admin
   createSubscription: (body: SubscriptionCreateRequest) =>

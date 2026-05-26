@@ -204,11 +204,34 @@ public final class CodeItemResource {
     @Consumes("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     @RolesAllowed({"RDM_AUTHOR", "RDM_ADMIN"})
     public Response bulkXlsx(
-            @Auth RdmmeshPrincipal principal, @PathParam("versionId") String versionId, InputStream body) {
+            @Auth RdmmeshPrincipal principal,
+            @PathParam("versionId") String versionId,
+            // E19 Commit 3 — pivot-режим: ?layout=pivot&horizon=1Y&row_residual_policy=implicit_default
+            @QueryParam("layout") String layout,
+            @QueryParam("horizon") String horizon,
+            @QueryParam("row_residual_policy") String rowResidualPolicy,
+            InputStream body) {
         UUID v = parseUuid(versionId, "versionId");
         BulkResult res;
         try {
-            res = authoring.bulkUpsertXlsx(v, body, principal.omUserId());
+            if (layout != null && layout.equalsIgnoreCase("pivot")) {
+                if (horizon == null || horizon.isBlank()) {
+                    throw new WebApplicationException(
+                            "layout=pivot requires ?horizon=<value> (e.g. 1Y)",
+                            Response.Status.BAD_REQUEST);
+                }
+                bank.rdmmesh.authoring.internal.xlsx.MatrixPivotSheetParser.RowResidualPolicy pol;
+                try {
+                    pol = bank.rdmmesh.authoring.internal.xlsx.MatrixPivotSheetParser.RowResidualPolicy
+                            .parseOrDefault(rowResidualPolicy);
+                } catch (IllegalArgumentException e) {
+                    throw new WebApplicationException(e.getMessage(), Response.Status.BAD_REQUEST);
+                }
+                res = authoring.bulkUpsertXlsxPivot(v, body, horizon, pol, principal.omUserId());
+            } else {
+                // Default / layout=long — существующее поведение E15.
+                res = authoring.bulkUpsertXlsx(v, body, principal.omUserId());
+            }
         } catch (IllegalStateException e) {
             throw new WebApplicationException(e.getMessage(), Response.Status.CONFLICT);
         }

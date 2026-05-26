@@ -143,20 +143,47 @@ export function DomainPage() {
         <Form
           form={form}
           layout="vertical"
-          initialValues={{ hierarchy_mode: "NONE" }}
-          onFinish={(v) =>
+          initialValues={{ hierarchy_mode: "NONE", key_preset: "single" }}
+          onFinish={(v) => {
+            let keySpec: Record<string, unknown> | null = null;
+            let schema: Record<string, unknown> | null = null;
+            if (v.key_preset === "transition_matrix") {
+              keySpec = {
+                parts: [
+                  { name: "from_rating", type: "STRING" },
+                  { name: "to_rating", type: "STRING" },
+                  {
+                    name: "horizon",
+                    type: "ENUM",
+                    allowed_values: ["1M", "3M", "6M", "1Y", "3Y", "5Y"],
+                  },
+                ],
+              };
+              schema = {
+                type: "object",
+                required: ["probability"],
+                properties: {
+                  probability: { type: "number", minimum: 0, maximum: 1 },
+                },
+              };
+            } else if (v.key_preset === "custom" && v.key_spec_json) {
+              try {
+                keySpec = JSON.parse(v.key_spec_json);
+              } catch {
+                message.error("key_spec: невалидный JSON");
+                return;
+              }
+            }
             createCodeSet.mutate({
               name: v.name,
               display_name: v.display_name || null,
               description: v.description || null,
               hierarchy_mode: v.hierarchy_mode,
-            })
-          }
+              key_spec: keySpec,
+              initial_schema: schema,
+            });
+          }}
         >
-          <Typography.Paragraph type="secondary">
-            Ключ по умолчанию — одиночный строковый код. Структуру атрибутов
-            (JSON Schema) и композитные ключи можно настроить позже.
-          </Typography.Paragraph>
           <Form.Item
             name="name"
             label="Code (snake_case)"
@@ -184,6 +211,35 @@ export function DomainPage() {
                 { value: "CROSS_CODESET", label: "CROSS_CODESET (ссылки между справочниками)" },
               ]}
             />
+          </Form.Item>
+          <Form.Item name="key_preset" label="Ключ справочника">
+            <Select
+              options={[
+                { value: "single", label: "Одиночный код (по умолчанию)" },
+                {
+                  value: "transition_matrix",
+                  label: "Матрица миграций (from_rating, to_rating, horizon)",
+                },
+                { value: "custom", label: "Custom (JSON)" },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.key_preset !== cur.key_preset}>
+            {({ getFieldValue }) =>
+              getFieldValue("key_preset") === "custom" ? (
+                <Form.Item
+                  name="key_spec_json"
+                  label="key_spec (JSON)"
+                  rules={[{ required: true, message: "Required" }]}
+                >
+                  <Input.TextArea
+                    rows={5}
+                    placeholder={'{"parts":[{"name":"code","type":"STRING"}]}'}
+                    style={{ fontFamily: "monospace", fontSize: 12 }}
+                  />
+                </Form.Item>
+              ) : null
+            }
           </Form.Item>
         </Form>
       </Modal>

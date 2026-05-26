@@ -123,10 +123,20 @@
     "effectiveTo": "Действует по",
     "viewGrid": "Таблица",
     "viewTree": "Дерево",
+    "viewPivot": "Матрица",
     "statusValues": {
       "ACTIVE": "ACTIVE",
       "RETIRED": "RETIRED"
     }
+  },
+  "pivot": {
+    "horizon": "Горизонт",
+    "fromHeader": "Из / В",
+    "absorbingShort": "absorbing",
+    "absorbingHint": "Поглощающее состояние: P(D→D)=1, переходов из этого состояния нет.",
+    "sumHint": "Сумма вероятностей по строке. Стохастичная матрица: Σ=1 для каждой from-строки.",
+    "cellLegend": "Диагональ — bold; нулевые ячейки — серым; Σ зелёный = строка стохастична.",
+    "noData": "Нет данных для матричного вью. Ожидаются key_parts вида [from_rating, to_rating, horizon]."
   },
   "tree": {
     "dragHint": "Перетащите узел в другой родительский узел для изменения parent_key. Drop в gap = sibling.",
@@ -181,7 +191,20 @@
     "xlsxHint": "Excel-книга (.xlsx). Строка-заголовок, дальше данные; берётся первый лист, где есть колонка key_parts (имена колонок — без учёта регистра). Обязательна только key_parts. Полные правила — docs/import-spravochnikov.md.",
     "xlsxSelected": "Выбран файл: {{name}}",
     "xlsxNoFile": "Выберите .xlsx файл",
-    "orPaste": "Или вставьте данные ниже:"
+    "orPaste": "Или вставьте данные ниже:",
+    "pivot": {
+      "tabLabel": "Pivot Matrix",
+      "intro": "Импорт матрицы миграций в pivot-формате: первая строка — заголовки to_rating, первая колонка — from_rating, ячейки — вероятности.",
+      "format": "Пример формата: пустая ячейка A1, далее AAA/A/BB/B в первой строке; в первой колонке те же грейды; в ячейках — числа от 0 до 1. Backend сам разложит в (from, to, horizon) triples.",
+      "horizon": "Горизонт",
+      "horizonRequired": "Выберите горизонт",
+      "residual": "Политика residual (если сумма строки < 1)",
+      "implicitDefault": "Дописать absorbing-колонку D (PD = 1 − Σ)",
+      "implicitDefaultHint": "Рекомендовано — публикация без явной D-колонки",
+      "strict": "Strict — отклонить импорт",
+      "strictHint": "Каждая строка обязана быть стохастичной (Σ = 1 ± 1e-3)",
+      "implicitDefaultAddedLabel": "+D-ячеек"
+    }
   },
   "diff": {
     "button": "Сравнить с другой версией",

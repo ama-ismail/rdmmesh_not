@@ -3,6 +3,8 @@ import {
   Alert,
   Button,
   Modal,
+  Radio,
+  Select,
   Space,
   Statistic,
   Table,
@@ -25,6 +27,14 @@ import { apiMutations, type NewItemBody } from "@/api/endpoints";
 import { qk } from "@/api/queryClient";
 import { ApiError } from "@/api/client";
 import type { BulkImportError, BulkImportResult } from "@/api/types";
+
+// E19 Commit 3 — Pivot Matrix import. Таб доступен для ЛЮБОГО CodeSet —
+// пользователь сам решает, подходит ли его файл для pivot-раскладки. Если
+// CodeSet одноключевой, а pivot-парсер создаёт triples [from, to, horizon] —
+// backend вернёт validation error (key_parts size mismatch). Это лучше, чем
+// прятать таб и заставлять пользователя угадывать про скрытые теги.
+const PIVOT_HORIZONS = ["1M", "3M", "6M", "1Y", "3Y", "5Y"] as const;
+type PivotResidualPolicy = "implicit_default" | "strict";
 
 interface Props {
   versionId: string;
@@ -83,6 +93,8 @@ export function BulkImportButton({ versionId, codesetId }: Props) {
   );
 }
 
+type ImportTabKey = "json" | "csv" | "xlsx" | "pivot";
+
 function BulkImportModal({
   open,
   onClose,
@@ -92,10 +104,14 @@ function BulkImportModal({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { message } = AntApp.useApp();
-  const [tab, setTab] = useState<"json" | "csv" | "xlsx">("json");
+  const pivotAvailable = true;
+  const [tab, setTab] = useState<ImportTabKey>("json");
   const [jsonText, setJsonText] = useState("");
   const [csvText, setCsvText] = useState("");
   const [xlsxFile, setXlsxFile] = useState<File | null>(null);
+  const [pivotFile, setPivotFile] = useState<File | null>(null);
+  const [pivotHorizon, setPivotHorizon] = useState<string>("1Y");
+  const [pivotPolicy, setPivotPolicy] = useState<PivotResidualPolicy>("implicit_default");
   const [parseError, setParseError] = useState<string | null>(null);
   const [result, setResult] = useState<BulkImportResult | null>(null);
 
@@ -103,6 +119,9 @@ function BulkImportModal({
     setJsonText("");
     setCsvText("");
     setXlsxFile(null);
+    setPivotFile(null);
+    setPivotHorizon("1Y");
+    setPivotPolicy("implicit_default");
     setParseError(null);
     setResult(null);
     setTab("json");
@@ -169,6 +188,16 @@ function BulkImportModal({
     onError,
   });
 
+  const importPivot = useMutation({
+    mutationFn: (args: { file: File; horizon: string; policy: PivotResidualPolicy }) =>
+      apiMutations.bulkXlsxPivot(versionId, args.file, {
+        horizon: args.horizon,
+        rowResidualPolicy: args.policy,
+      }),
+    onSuccess,
+    onError,
+  });
+
   const submit = () => {
     setParseError(null);
     setResult(null);
@@ -184,12 +213,23 @@ function BulkImportModal({
         return;
       }
       importCsv.mutate(csvText);
-    } else {
+    } else if (tab === "xlsx") {
       if (!xlsxFile) {
         setParseError(t("bulk.xlsxNoFile"));
         return;
       }
       importXlsx.mutate(xlsxFile);
+    } else {
+      // pivot
+      if (!pivotFile) {
+        setParseError(t("bulk.xlsxNoFile"));
+        return;
+      }
+      if (!pivotHorizon) {
+        setParseError(t("bulk.pivot.horizonRequired"));
+        return;
+      }
+      importPivot.mutate({ file: pivotFile, horizon: pivotHorizon, policy: pivotPolicy });
     }
   };
 
@@ -201,6 +241,10 @@ function BulkImportModal({
       setXlsxFile(obj as File);
       return false;
     }
+    if (tab === "pivot") {
+      setPivotFile(obj as File);
+      return false;
+    }
     void obj.text().then((text) => {
       if (tab === "json") setJsonText(text);
       else setCsvText(text);
@@ -209,7 +253,10 @@ function BulkImportModal({
   };
 
   const isPending =
-    importJson.isPending || importCsv.isPending || importXlsx.isPending;
+    importJson.isPending ||
+    importCsv.isPending ||
+    importXlsx.isPending ||
+    importPivot.isPending;
 
   return (
     <Modal
@@ -225,7 +272,7 @@ function BulkImportModal({
     >
       <Tabs
         activeKey={tab}
-        onChange={(k) => setTab(k as "json" | "csv" | "xlsx")}
+        onChange={(k) => setTab(k as ImportTabKey)}
         items={[
           {
             key: "json",
@@ -331,6 +378,75 @@ function BulkImportModal({
               </Space>
             ),
           },
+          // E19 Commit 3 — Pivot Matrix tab (только для transition_matrix CodeSet'ов).
+          ...(pivotAvailable
+            ? [
+                {
+                  key: "pivot" as ImportTabKey,
+                  label: t("bulk.pivot.tabLabel"),
+                  children: (
+                    <Space direction="vertical" style={{ width: "100%" }}>
+                      <Alert
+                        type="info"
+                        showIcon
+                        message={t("bulk.pivot.intro")}
+                        description={t("bulk.pivot.format")}
+                      />
+                      <Space>
+                        <Typography.Text strong>{t("bulk.pivot.horizon")}:</Typography.Text>
+                        <Select<string>
+                          value={pivotHorizon}
+                          onChange={(v) => setPivotHorizon(v)}
+                          style={{ minWidth: 90 }}
+                          options={PIVOT_HORIZONS.map((h) => ({ label: h, value: h }))}
+                        />
+                      </Space>
+                      <Space direction="vertical" style={{ width: "100%" }}>
+                        <Typography.Text strong>{t("bulk.pivot.residual")}:</Typography.Text>
+                        <Radio.Group
+                          value={pivotPolicy}
+                          onChange={(e) => setPivotPolicy(e.target.value as PivotResidualPolicy)}
+                        >
+                          <Space direction="vertical">
+                            <Radio value="implicit_default">
+                              {t("bulk.pivot.implicitDefault")}
+                              <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                                ({t("bulk.pivot.implicitDefaultHint")})
+                              </Typography.Text>
+                            </Radio>
+                            <Radio value="strict">
+                              {t("bulk.pivot.strict")}
+                              <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                                ({t("bulk.pivot.strictHint")})
+                              </Typography.Text>
+                            </Radio>
+                          </Space>
+                        </Radio.Group>
+                      </Space>
+                      <Upload.Dragger
+                        accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        multiple={false}
+                        showUploadList={false}
+                        beforeUpload={(file) =>
+                          onFileSelected(file as unknown as UploadFile<unknown>)
+                        }
+                        style={{ padding: 12 }}
+                      >
+                        <p style={{ margin: 0 }}>
+                          <FileExcelOutlined style={{ fontSize: 24 }} />
+                          <span style={{ marginLeft: 8 }}>{t("bulk.dropXlsx")}</span>
+                        </p>
+                      </Upload.Dragger>
+                      {pivotFile && (
+                        <Typography.Text type="success">
+                          {t("bulk.xlsxSelected", { name: pivotFile.name })}
+                        </Typography.Text>
+                      )}
+                    </Space>
+                  ),
+                },
+              ]
+            : []),
         ]}
       />
 
@@ -378,6 +494,14 @@ function ResultPanel({ result }: { result: BulkImportResult }) {
         <Statistic title="updated" value={result.rows_updated ?? 0} />
         <Statistic title="unchanged" value={result.rows_unchanged ?? 0} />
         <Statistic title="errors" value={result.errors?.length ?? 0} valueStyle={{ color: "#cf1322" }} />
+        {/* E19 — pivot import: сколько ячеек absorbing-колонки дописал парсер. */}
+        {result.implicitDefaultAdded != null && result.implicitDefaultAdded > 0 && (
+          <Statistic
+            title={t("bulk.pivot.implicitDefaultAddedLabel")}
+            value={result.implicitDefaultAdded}
+            valueStyle={{ color: "#1677ff" }}
+          />
+        )}
       </Space>
       {result.errors && result.errors.length > 0 && (
         <Table<BulkImportError>

@@ -123,10 +123,20 @@
     "effectiveTo": "Effective to",
     "viewGrid": "Grid",
     "viewTree": "Tree",
+    "viewPivot": "Matrix",
     "statusValues": {
       "ACTIVE": "ACTIVE",
       "RETIRED": "RETIRED"
     }
+  },
+  "pivot": {
+    "horizon": "Horizon",
+    "fromHeader": "From / To",
+    "absorbingShort": "absorbing",
+    "absorbingHint": "Absorbing state: P(D→D)=1, no outgoing transitions.",
+    "sumHint": "Row probability sum. Stochastic matrix: Σ=1 for every from-row.",
+    "cellLegend": "Diagonal in bold; zero cells in grey; Σ green = row is stochastic.",
+    "noData": "No data for matrix view. Expected key_parts shape: [from_rating, to_rating, horizon]."
   },
   "tree": {
     "dragHint": "Drag a node onto another to change its parent_key. Drop in the gap = sibling.",
@@ -181,7 +191,20 @@
     "xlsxHint": "Excel workbook (.xlsx). Header row then data; the first sheet that has a key_parts column is used (column names are case-insensitive). Only key_parts is required. Full rules — docs/import-spravochnikov.md.",
     "xlsxSelected": "Selected file: {{name}}",
     "xlsxNoFile": "Choose an .xlsx file",
-    "orPaste": "Or paste payload below:"
+    "orPaste": "Or paste payload below:",
+    "pivot": {
+      "tabLabel": "Pivot Matrix",
+      "intro": "Import a transition matrix in pivot layout: first row = to_rating headers, first column = from_rating, cells = probabilities.",
+      "format": "Format example: empty A1, then AAA/A/BB/B across the first row; same grades down the first column; numeric cells 0..1. Backend will fan out into (from, to, horizon) triples.",
+      "horizon": "Horizon",
+      "horizonRequired": "Pick a horizon",
+      "residual": "Residual policy (when row sum < 1)",
+      "implicitDefault": "Append absorbing D-column (PD = 1 − Σ)",
+      "implicitDefaultHint": "Recommended — matches publishing without explicit D",
+      "strict": "Strict — reject import",
+      "strictHint": "Every row must be stochastic (Σ = 1 ± 1e-3)",
+      "implicitDefaultAddedLabel": "+D cells"
+    }
   },
   "diff": {
     "button": "Compare with another version",

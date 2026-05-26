@@ -34,9 +34,17 @@ import { DiffButton } from "@/components/DiffViewer";
 import { ConsumerViewButton } from "@/components/ConsumerViewDrawer";
 import { HierarchyTree } from "@/components/HierarchyTree";
 import { RebuildClosureButton } from "@/components/RebuildClosureButton";
+import { RatingTransitionPivotView } from "@/components/RatingTransitionPivotView";
 import type { CodeSet, CodeSetVersion, Domain, VerifyResponse } from "@/api/types";
 
-type ViewMode = "grid" | "tree";
+type ViewMode = "grid" | "tree" | "pivot";
+
+// E19: показываем toggle «Матрица» для CodeSet'ов с composite key (≥ 3 key_parts),
+// что соответствует структуре [from, to, horizon]. Для одноключевых и двуключевых
+// pivot-вью не имеет смысла — оставляем только Grid/Tree.
+function hasMatrixKeySpec(codeset: CodeSet | null | undefined): boolean {
+  return (codeset?.key_spec?.parts?.length ?? 0) >= 3;
+}
 
 export function VersionPage() {
   const { t } = useTranslation();
@@ -186,52 +194,66 @@ export function VersionPage() {
         }
       >
         <Loader {...itemsPage}>
-          {(p) => (
-            <>
-              {codeset.data && codeset.data.hierarchy_mode !== "NONE" && (
-                <div style={{ marginBottom: 12 }}>
-                  <Segmented<ViewMode>
-                    value={viewMode}
-                    onChange={(v) => setViewMode(v as ViewMode)}
-                    options={[
-                      { label: t("items.viewGrid"), value: "grid" },
-                      { label: t("items.viewTree"), value: "tree" },
-                    ]}
-                  />
-                </div>
-              )}
-              {viewMode === "tree" && version.data ? (
-                <HierarchyTree
-                  items={p.items}
-                  versionId={vid}
-                  codesetId={version.data.codeset_id}
-                  editable={version.data.status === "DRAFT"}
-                />
-              ) : (
-                <>
-                  <ItemsTable
-                    items={p.items}
-                    editable={version.data?.status === "DRAFT"}
-                    versionId={vid}
-                    codesetId={version.data?.codeset_id}
-                  />
-                  <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
-                    <Pagination
-                      current={p.page + 1}
-                      pageSize={p.size}
-                      total={p.total}
-                      showSizeChanger
-                      pageSizeOptions={[50, 100, 250, 500, 1000]}
-                      onChange={(nextPage, nextSize) => {
-                        setPage(nextPage - 1);
-                        setSize(nextSize);
-                      }}
+          {(p) => {
+            const matrixMode = hasMatrixKeySpec(codeset.data);
+            const treeMode = codeset.data && codeset.data.hierarchy_mode !== "NONE";
+            const segOptions: Array<{ label: string; value: ViewMode }> = [
+              { label: t("items.viewGrid"), value: "grid" },
+            ];
+            if (treeMode) segOptions.push({ label: t("items.viewTree"), value: "tree" });
+            if (matrixMode) segOptions.push({ label: t("items.viewPivot"), value: "pivot" });
+            // Если в коде уже выбран pivot/tree, а codeset больше его не поддерживает —
+            // откатываемся на grid (защита от консистентности при смене codeset.data).
+            const effectiveMode: ViewMode =
+              (viewMode === "tree" && !treeMode) || (viewMode === "pivot" && !matrixMode)
+                ? "grid"
+                : viewMode;
+            return (
+              <>
+                {(treeMode || matrixMode) && (
+                  <div style={{ marginBottom: 12 }}>
+                    <Segmented<ViewMode>
+                      value={effectiveMode}
+                      onChange={(v) => setViewMode(v as ViewMode)}
+                      options={segOptions}
                     />
                   </div>
-                </>
-              )}
-            </>
-          )}
+                )}
+                {effectiveMode === "tree" && version.data ? (
+                  <HierarchyTree
+                    items={p.items}
+                    versionId={vid}
+                    codesetId={version.data.codeset_id}
+                    editable={version.data.status === "DRAFT"}
+                  />
+                ) : effectiveMode === "pivot" ? (
+                  <RatingTransitionPivotView items={p.items} />
+                ) : (
+                  <>
+                    <ItemsTable
+                      items={p.items}
+                      editable={version.data?.status === "DRAFT"}
+                      versionId={vid}
+                      codesetId={version.data?.codeset_id}
+                    />
+                    <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
+                      <Pagination
+                        current={p.page + 1}
+                        pageSize={p.size}
+                        total={p.total}
+                        showSizeChanger
+                        pageSizeOptions={[50, 100, 250, 500, 1000]}
+                        onChange={(nextPage, nextSize) => {
+                          setPage(nextPage - 1);
+                          setSize(nextSize);
+                        }}
+                      />
+                    </div>
+                  </>
+                )}
+              </>
+            );
+          }}
         </Loader>
       </Card>
 

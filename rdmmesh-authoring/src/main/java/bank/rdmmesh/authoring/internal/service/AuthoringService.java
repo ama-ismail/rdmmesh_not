@@ -37,6 +37,7 @@ import bank.rdmmesh.authoring.internal.dao.CodeSetVersionDao;
 import bank.rdmmesh.authoring.internal.dao.CodeSetVersionDao.VersionRow;
 import bank.rdmmesh.authoring.internal.diff.DiffCalculator;
 import bank.rdmmesh.authoring.internal.validation.AttributesValidator;
+import bank.rdmmesh.authoring.internal.xlsx.MatrixPivotSheetParser;
 import bank.rdmmesh.authoring.internal.xlsx.XlsxBulkParser;
 import bank.rdmmesh.authoring.resource.CodeItemDto;
 import bank.rdmmesh.spec.entity.CodeSetVersion;
@@ -469,6 +470,36 @@ public final class AuthoringService {
             String msg = e.getMessage() == null ? e.toString() : e.getMessage();
             return BulkResult.rejected(0, List.of(new BulkError(-1, null, "xlsx", msg)));
         }
+        return upsertParsedRows(versionId, raw, author);
+    }
+
+    /**
+     * Bulk-import pivot-XLSX матриц миграций (E19). Раскладывает квадратную матрицу
+     * в triples {@code (from, to, horizon, probability)}. Если {@code IMPLICIT_DEFAULT}
+     * и сумма строки &lt; 1 — дописывает absorbing-колонку из невязки. Возвращает
+     * стандартный {@link BulkResult} с дополнительным числом дописанных ячеек
+     * в {@code implicitDefaultAdded} (через side-channel field, см. ниже).
+     */
+    public BulkResult bulkUpsertXlsxPivot(
+            UUID versionId,
+            InputStream xlsxIn,
+            String horizon,
+            MatrixPivotSheetParser.RowResidualPolicy policy,
+            UUID author) {
+        MatrixPivotSheetParser parser = new MatrixPivotSheetParser(json, horizon, policy);
+        MatrixPivotSheetParser.PivotParseResult parsed;
+        try {
+            parsed = parser.parse(xlsxIn);
+        } catch (IOException | RuntimeException e) {
+            String msg = e.getMessage() == null ? e.toString() : e.getMessage();
+            return BulkResult.rejected(0, List.of(new BulkError(-1, null, "xlsx-pivot", msg)));
+        }
+        BulkResult base = upsertParsedRows(versionId, parsed.rows(), author);
+        return base.withImplicitDefaultAdded(parsed.implicitDefaultAdded());
+    }
+
+    /** Общий путь long-формата и pivot после разбора в triples — DRY с CSV. */
+    private BulkResult upsertParsedRows(UUID versionId, List<CsvBulkParser.Row> raw, UUID author) {
         List<NewItem> mapped = new ArrayList<>(raw.size());
         for (CsvBulkParser.Row r : raw) {
             mapped.add(new NewItem(
@@ -607,13 +638,28 @@ public final class AuthoringService {
     public record ItemsPage(int page, int size, int total, List<CodeItemDto> items) {}
 
     public record BulkResult(
-            String status, int rowsTotal, int rowsAdded, int rowsUpdated, int rowsUnchanged, List<BulkError> errors) {
+            String status,
+            int rowsTotal,
+            int rowsAdded,
+            int rowsUpdated,
+            int rowsUnchanged,
+            List<BulkError> errors,
+            int implicitDefaultAdded) {
         public static BulkResult applied(int total, int added, int updated, int unchanged) {
-            return new BulkResult("APPLIED", total, added, updated, unchanged, List.of());
+            return new BulkResult("APPLIED", total, added, updated, unchanged, List.of(), 0);
         }
 
         public static BulkResult rejected(int total, List<BulkError> errors) {
-            return new BulkResult("REJECTED", total, 0, 0, 0, Collections.unmodifiableList(errors));
+            return new BulkResult(
+                    "REJECTED", total, 0, 0, 0, Collections.unmodifiableList(errors), 0);
+        }
+
+        /**
+         * Возвращает новый BulkResult с обновлённым счётчиком дописанных residual-ячеек
+         * (E19 pivot-import: implicit_default). 0 для long-формата и non-pivot путей.
+         */
+        public BulkResult withImplicitDefaultAdded(int n) {
+            return new BulkResult(status, rowsTotal, rowsAdded, rowsUpdated, rowsUnchanged, errors, n);
         }
     }
 
