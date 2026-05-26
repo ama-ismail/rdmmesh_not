@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import {
   Alert,
   Breadcrumb,
@@ -23,6 +23,7 @@ import { useTranslation } from "react-i18next";
 import { api } from "@/api/endpoints";
 import { qk } from "@/api/queryClient";
 import { useApi } from "@/api/useApi";
+import { useQueryClient } from "@tanstack/react-query";
 import { Loader } from "@/components/Loader";
 import { StatusTag } from "@/components/StatusTag";
 import { ItemsTable } from "@/components/ItemsTable";
@@ -51,10 +52,18 @@ export function VersionPage() {
   const { versionId } = useParams<{ versionId: string }>();
   const vid = versionId!;
 
+  const queryClient = useQueryClient();
   const version = useApi(() => api.getVersion(vid), qk.versions.one(vid));
   const [page, setPage] = useState(0);
   const [size, setSize] = useState(100);
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const handleViewModeChange = useCallback(
+    (v: ViewMode) => {
+      setViewMode(v);
+      queryClient.refetchQueries({ queryKey: qk.versions.itemsRoot(vid) });
+    },
+    [vid, queryClient],
+  );
   const itemsPage = useApi(() => api.listItems(vid, page, size), qk.versions.items(vid, page, size));
   const history = useApi(() => api.transitionHistory(vid), qk.versions.history(vid));
   // Список версий codeset'а нужен для DiffViewer (выбор from-версии). Загружаем
@@ -214,7 +223,7 @@ export function VersionPage() {
                   <div style={{ marginBottom: 12 }}>
                     <Segmented<ViewMode>
                       value={effectiveMode}
-                      onChange={(v) => setViewMode(v as ViewMode)}
+                      onChange={(v) => handleViewModeChange(v as ViewMode)}
                       options={segOptions}
                     />
                   </div>
