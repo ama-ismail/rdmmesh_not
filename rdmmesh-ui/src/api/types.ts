@@ -43,9 +43,16 @@ export interface Domain {
   updated_at?: string | null;
 }
 
+export interface LabelCodesetRef {
+  codeset_id: string;
+}
+
 export interface KeyPart {
   name: string;
   type: "STRING" | "INTEGER" | "BOOLEAN" | "DATE" | string;
+  // E20 — display-only cross-codeset ref: UI подменяет «голый» код на «код — label»
+  // из current_published_version указанного CodeSet'а. Backend ref не валидирует.
+  label_codeset_ref?: LabelCodesetRef | null;
 }
 
 export interface KeySpec {

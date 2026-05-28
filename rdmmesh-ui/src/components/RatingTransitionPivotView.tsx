@@ -1,8 +1,11 @@
 import { useMemo, useState } from "react";
 import { Empty, Select, Space, Table, Tag, Tooltip, Typography, type TableColumnsType } from "antd";
 import { useTranslation } from "react-i18next";
+import { useQuery } from "@tanstack/react-query";
 
-import type { CodeItem } from "@/api/types";
+import { api } from "@/api/endpoints";
+import { qk } from "@/api/queryClient";
+import type { CodeItem, KeySpec } from "@/api/types";
 
 /**
  * RatingTransitionPivotView — pivot-вью матрицы миграций рейтингов (E19 Commit 2).
@@ -55,10 +58,20 @@ function isStochasticMatrix(sums: number[]): boolean {
 
 interface Props {
   items: CodeItem[];
+  // E20 — нужен чтобы достать label_codeset_ref для осей from/to.
+  // Если null — view работает как раньше (только коды в заголовках).
+  keySpec?: KeySpec | null;
 }
 
-export function RatingTransitionPivotView({ items }: Props) {
+export function RatingTransitionPivotView({ items, keySpec }: Props) {
   const { t } = useTranslation();
+
+  // E20 — единственный ref-словарь для осей from/to (parts[0]/parts[1]).
+  // Берём из parts[0]; если parts[1] ссылается на другой — игнорируем
+  // (для DPD-кейса оба = один словарь, что и нужно в 90% случаев).
+  const refCodesetId =
+    keySpec?.parts?.[0]?.label_codeset_ref?.codeset_id ?? null;
+  const dictLabels = useDictLabels(refCodesetId);
 
   // 1. Discover horizons (key_parts[2]) — для Select'а
   const horizons = useMemo(() => {
@@ -68,15 +81,20 @@ export function RatingTransitionPivotView({ items }: Props) {
         set.add(it.key_parts[2]);
       }
     }
-    // Сортируем горизонты по «логической длительности» — fallback на alpha.
+    // Сортируем горизонты по «логической длительности». Для неизвестных
+    // значений — numeric fallback ('10' < '2' лексикографически — баг, поэтому
+    // парсим число): сначала по числу, иначе alpha.
     const order = ["1M", "3M", "6M", "1Y", "2Y", "3Y", "5Y", "7Y", "10Y"];
     return Array.from(set).sort((a, b) => {
       const ia = order.indexOf(a);
       const ib = order.indexOf(b);
-      if (ia === -1 && ib === -1) return a.localeCompare(b);
-      if (ia === -1) return 1;
-      if (ib === -1) return -1;
-      return ia - ib;
+      if (ia >= 0 && ib >= 0) return ia - ib;
+      if (ia >= 0) return -1;
+      if (ib >= 0) return 1;
+      const na = parseFloat(a);
+      const nb = parseFloat(b);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return a.localeCompare(b);
     });
   }, [items]);
 
@@ -152,10 +170,11 @@ export function RatingTransitionPivotView({ items }: Props) {
       dataIndex: "from",
       key: "from",
       fixed: "left",
-      width: 90,
+      width: dictLabels.size > 0 ? 160 : 90,
       render: (from: string, row) => (
-        <Space>
+        <Space size={4}>
           <strong>{from}</strong>
+          {renderLabelSuffix(dictLabels, from)}
           {row.isAbsorbing && (
             <Tooltip title={t("pivot.absorbingHint")}>
               <Tag color="default">{t("pivot.absorbingShort")}</Tag>
@@ -164,18 +183,30 @@ export function RatingTransitionPivotView({ items }: Props) {
         </Space>
       ),
     },
-    // Колонки = to_rating
-    ...axis.map((to) => ({
-      title: <code>{to}</code>,
-      key: `to_${to}`,
-      align: "right" as const,
-      width: 86,
-      render: (_v: unknown, row: Row) => {
-        const p = cellMap.get(`${row.from}|${to}`);
-        if (p === undefined) return <Typography.Text type="secondary">—</Typography.Text>;
-        return <span style={diagStyle(row.from === to, p)}>{fmt(p)}</span>;
-      },
-    })),
+    // Колонки = to_rating (с подпиской labels при наличии ref-словаря).
+    ...axis.map((to) => {
+      const label = dictLabels.get(to) ?? dictLabels.get(normalizeNumericCode(to));
+      return {
+        title: (
+          <Space size={4} direction="vertical" style={{ textAlign: "right", lineHeight: 1.1 }}>
+            <code>{to}</code>
+            {label && (
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                {label}
+              </Typography.Text>
+            )}
+          </Space>
+        ),
+        key: `to_${to}`,
+        align: "right" as const,
+        width: label ? 110 : 86,
+        render: (_v: unknown, row: Row) => {
+          const p = cellMap.get(`${row.from}|${to}`);
+          if (p === undefined) return <Typography.Text type="secondary">—</Typography.Text>;
+          return <span style={diagStyle(row.from === to, p)}>{fmt(p)}</span>;
+        },
+      };
+    }),
     {
       title: <Tooltip title={t("pivot.sumHint")}>Σ</Tooltip>,
       dataIndex: "sum",
@@ -238,9 +269,88 @@ function stochasticColor(sum: number): string {
   return Math.abs(sum - 1) <= eps ? "#52c41a" : "#cf1322";
 }
 
+// E20 — нормализация «excelовских» числовых кодов: '1.0' / '1.00' → '1'.
+// Нужно потому, что Excel при вводе целого в numeric-ячейке хранит double 1.0,
+// и fastexcel-reader возвращает текст '1.0'. Словарь обычно сидится с
+// целочисленными ключами '1','2',… — без нормализации матч не сработает.
+// '1.5' / 'AAA' остаются как есть.
+function normalizeNumericCode(s: string): string {
+  return /^-?\d+\.0+$/.test(s) ? s.split(".")[0] : s;
+}
+
+// Semver compare без зависимостей: '0.10.0' > '0.2.0' (а localeCompare с
+// numeric:true тоже работает, но в Safari ведёт себя нестабильно — пишем явно).
+function compareSemver(a: string, b: string): number {
+  const pa = a.split(".").map((s) => parseInt(s, 10) || 0);
+  const pb = b.split(".").map((s) => parseInt(s, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+// E20 — резолвер меток из ref-словаря. Цепочка: versions(by-codeset) →
+// items(latest PUBLISHED). Раньше пытался читать CodeSet.current_published_version,
+// но backend это поле НЕ возвращает (см. CodeSetResource DTO) — поэтому идём
+// напрямую через список версий и сами выбираем самую свежую PUBLISHED.
+// Каждый шаг React Query кэширует независимо (staleTime 30s).
+// Если у dict-CodeSet'а нет PUBLISHED-версии (только DRAFT/IN_REVIEW) —
+// возвращаем пустую мапу, view деградирует к «голым» кодам без ошибок.
+// Мапа индексируется ОБОИМИ вариантами кода: '1' → label И '1.0' → label, чтобы
+// lookup работал независимо от того, как Excel записал число.
+function useDictLabels(refCodesetId: string | null): Map<string, string> {
+  const versions = useQuery({
+    queryKey: qk.versions.byCodeset(refCodesetId ?? "__none"),
+    queryFn: () => api.listVersionsByCodeSet(refCodesetId!),
+    enabled: !!refCodesetId,
+  });
+  // Выбираем самую свежую PUBLISHED-версию. Сортируем по semver desc; для
+  // 0.10.0 vs 0.2.0 numeric-compare даст корректный порядок.
+  const publishedVersionId = useMemo(() => {
+    const pub = (versions.data ?? []).filter((v) => v.status === "PUBLISHED");
+    pub.sort((a, b) => compareSemver(b.version, a.version));
+    return pub[0]?.id ?? null;
+  }, [versions.data]);
+
+  const items = useQuery({
+    queryKey: qk.versions.items(publishedVersionId ?? "__none", 0, 1000),
+    queryFn: () => api.listItems(publishedVersionId!, 0, 1000),
+    enabled: !!publishedVersionId,
+  });
+
+  return useMemo(() => {
+    const map = new Map<string, string>();
+    for (const it of items.data?.items ?? []) {
+      const code = it.key_parts?.[0];
+      if (!code) continue;
+      const label = it.label_ru || it.label_en || "";
+      if (!label) continue;
+      map.set(code, label);
+      // Заводим оба варианта: '1.0' тоже резолвится в label словарного '1'.
+      const norm = normalizeNumericCode(code);
+      if (norm !== code) map.set(norm, label);
+      // И наоборот: если словарь сидится как '1.0', матрица с '1' тоже найдёт.
+      if (code.match(/^-?\d+$/)) map.set(code + ".0", label);
+    }
+    return map;
+  }, [items.data]);
+}
+
+function renderLabelSuffix(dict: Map<string, string>, code: string) {
+  const label = dict.get(code) ?? dict.get(normalizeNumericCode(code));
+  if (!label) return null;
+  return (
+    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+      — {label}
+    </Typography.Text>
+  );
+}
+
 function sortRatings(values: string[]): string[] {
-  // Сначала пробуем DPD-порядок (delinquency), потом rating-порядок, потом alpha.
-  // Префиксное сравнение для DPD устойчиво к регистру и пробелам.
+  // Сначала пробуем DPD-порядок (delinquency), потом rating-порядок, потом
+  // numeric (если все значения числовые — '1' < '2' < … < '10', а не '10' < '2'),
+  // потом alpha.
   const norm = (v: string) => v.trim().toLowerCase();
   const dpdIdx = (v: string) => {
     const n = norm(v);
@@ -252,6 +362,12 @@ function sortRatings(values: string[]): string[] {
   const dpdHits = values.filter((v) => dpdIdx(v) >= 0).length;
   const ratingHits = values.filter((v) => ratingIdx(v) >= 0).length;
   const useDpd = dpdHits >= ratingHits && dpdHits > 0;
+  // Если ни DPD, ни rating не подходят, проверяем числовой fallback.
+  const allNumeric =
+    !useDpd &&
+    ratingHits === 0 &&
+    values.length > 0 &&
+    values.every((v) => /^-?\d+(\.\d+)?$/.test(v.trim()));
 
   const key = useDpd ? dpdIdx : ratingIdx;
   return [...values].sort((a, b) => {
@@ -260,6 +376,7 @@ function sortRatings(values: string[]): string[] {
     const ea = ka < 0 ? Number.MAX_SAFE_INTEGER : ka;
     const eb = kb < 0 ? Number.MAX_SAFE_INTEGER : kb;
     if (ea !== eb) return ea - eb;
+    if (allNumeric) return parseFloat(a) - parseFloat(b);
     return a.localeCompare(b);
   });
 }

@@ -147,11 +147,25 @@ export function DomainPage() {
           onFinish={(v) => {
             let keySpec: Record<string, unknown> | null = null;
             let schema: Record<string, unknown> | null = null;
+            // E20 — display-only ссылка на словарь меток для оси матрицы.
+            // Прикручивается к двум первым частям ключа (from_*/to_*) только если
+            // пользователь явно выбрал словарь в селекте.
+            const labelRef = v.label_dict_codeset_id
+              ? { codeset_id: v.label_dict_codeset_id as string }
+              : null;
             if (v.key_preset === "transition_matrix") {
               keySpec = {
                 parts: [
-                  { name: "from_rating", type: "STRING" },
-                  { name: "to_rating", type: "STRING" },
+                  {
+                    name: "from_rating",
+                    type: "STRING",
+                    ...(labelRef ? { label_codeset_ref: labelRef } : {}),
+                  },
+                  {
+                    name: "to_rating",
+                    type: "STRING",
+                    ...(labelRef ? { label_codeset_ref: labelRef } : {}),
+                  },
                   {
                     name: "horizon",
                     type: "ENUM",
@@ -169,8 +183,16 @@ export function DomainPage() {
             } else if (v.key_preset === "delinquency_matrix") {
               keySpec = {
                 parts: [
-                  { name: "from_bucket", type: "STRING" },
-                  { name: "to_bucket", type: "STRING" },
+                  {
+                    name: "from_bucket",
+                    type: "STRING",
+                    ...(labelRef ? { label_codeset_ref: labelRef } : {}),
+                  },
+                  {
+                    name: "to_bucket",
+                    type: "STRING",
+                    ...(labelRef ? { label_codeset_ref: labelRef } : {}),
+                  },
                   {
                     name: "period",
                     type: "ENUM",
@@ -249,21 +271,49 @@ export function DomainPage() {
             />
           </Form.Item>
           <Form.Item noStyle shouldUpdate={(prev, cur) => prev.key_preset !== cur.key_preset}>
-            {({ getFieldValue }) =>
-              getFieldValue("key_preset") === "custom" ? (
-                <Form.Item
-                  name="key_spec_json"
-                  label="key_spec (JSON)"
-                  rules={[{ required: true, message: "Required" }]}
-                >
-                  <Input.TextArea
-                    rows={5}
-                    placeholder={'{"parts":[{"name":"code","type":"STRING"}]}'}
-                    style={{ fontFamily: "monospace", fontSize: 12 }}
-                  />
-                </Form.Item>
-              ) : null
-            }
+            {({ getFieldValue }) => {
+              const preset = getFieldValue("key_preset");
+              if (preset === "custom") {
+                return (
+                  <Form.Item
+                    name="key_spec_json"
+                    label="key_spec (JSON)"
+                    rules={[{ required: true, message: "Required" }]}
+                  >
+                    <Input.TextArea
+                      rows={5}
+                      placeholder={'{"parts":[{"name":"code","type":"STRING"}]}'}
+                      style={{ fontFamily: "monospace", fontSize: 12 }}
+                    />
+                  </Form.Item>
+                );
+              }
+              // E20 — словарь меток для осей from/to у матриц.
+              // Видим только когда preset матричный. Кандидаты — одноключевые
+              // CodeSet'ы текущего домена (key_spec.parts.length === 1).
+              if (preset === "transition_matrix" || preset === "delinquency_matrix") {
+                const dictCandidates = (codesets.data ?? []).filter(
+                  (c) => (c.key_spec?.parts?.length ?? 0) === 1,
+                );
+                return (
+                  <Form.Item
+                    name="label_dict_codeset_id"
+                    label="Словарь меток для осей from/to (опционально)"
+                    extra="Одноключевой справочник того же домена; UI подставит «код — label» в заголовках матрицы. Backend ссылку не валидирует."
+                  >
+                    <Select<string>
+                      allowClear
+                      placeholder="— не использовать —"
+                      options={dictCandidates.map((c) => ({
+                        value: c.id,
+                        label: `${c.display_name ?? c.name} (${c.name})`,
+                      }))}
+                    />
+                  </Form.Item>
+                );
+              }
+              return null;
+            }}
           </Form.Item>
         </Form>
       </Modal>

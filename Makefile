@@ -97,6 +97,10 @@ ui: ## Run the React dev server
 seed-credit-risk: ## Seed Credit Risk demo (E19): credit_risk domain + rating_scale + delinquency_buckets + rating_transition_matrix (5x5 for 1Y, customer's matrix P with implicit D column). Idempotent by SFX. Requires `make up` first.
 	bash scripts/seed-credit-risk.sh
 
+.PHONY: seed-domain-roles
+seed-domain-roles: ## Seed domain-role-directory for ALL existing domains (dev-steward → STEWARD, dev-owner → BUSINESS_OWNER). Без создания доменов; чинит «нет кандидатов в справочнике ролей» в submit-диалоге. Requires `make up` first.
+	bash scripts/seed-domain-roles.sh
+
 .PHONY: clean
 clean: ## Remove build artifacts (Maven target/ and Vite dist/)
 	$(MVN) clean

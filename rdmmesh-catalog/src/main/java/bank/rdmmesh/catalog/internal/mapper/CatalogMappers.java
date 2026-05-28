@@ -33,7 +33,17 @@ import com.fasterxml.jackson.core.type.TypeReference;
  */
 public final class CatalogMappers {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    // FAIL_ON_UNKNOWN_PROPERTIES=false — forward-compat: новые опциональные поля
+    // в schemas (например, E20 label_codeset_ref) не должны ломать чтение
+    // существующих CodeSet'ов до перегенерации POJO. Codegen всё равно обновит
+    // POJO на следующем mvn compile, но сценарий «backend поднят на старой
+    // сборке, а UI уже пишет новые поля» теперь безопасен.
+    private static final ObjectMapper JSON =
+            new ObjectMapper()
+                    .configure(
+                            com.fasterxml.jackson.databind.DeserializationFeature
+                                    .FAIL_ON_UNKNOWN_PROPERTIES,
+                            false);
 
     private CatalogMappers() {}
 

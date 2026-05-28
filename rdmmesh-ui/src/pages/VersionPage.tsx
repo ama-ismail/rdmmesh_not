@@ -236,7 +236,10 @@ export function VersionPage() {
                     editable={version.data.status === "DRAFT"}
                   />
                 ) : effectiveMode === "pivot" ? (
-                  <RatingTransitionPivotView items={p.items} />
+                  <RatingTransitionPivotView
+                    items={p.items}
+                    keySpec={codeset.data?.key_spec ?? null}
+                  />
                 ) : (
                   <>
                     <ItemsTable

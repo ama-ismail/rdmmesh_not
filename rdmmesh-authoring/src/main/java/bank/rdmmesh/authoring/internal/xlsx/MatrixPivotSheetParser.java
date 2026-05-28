@@ -203,7 +203,7 @@ public final class MatrixPivotSheetParser {
         int cells = row.getCellCount();
         for (int c = 0; c < cells; c++) {
             String t = row.getCellText(c);
-            header.add(t == null ? "" : t.trim());
+            header.add(normalizeCode(t == null ? "" : t.trim()));
         }
         while (!header.isEmpty() && header.get(header.size() - 1).isEmpty()) {
             header.remove(header.size() - 1);
@@ -214,7 +214,20 @@ public final class MatrixPivotSheetParser {
     private static String trimToNull(String s) {
         if (s == null) return null;
         String t = s.trim();
-        return t.isEmpty() ? null : t;
+        return t.isEmpty() ? null : normalizeCode(t);
+    }
+
+    /**
+     * Excel хранит целые числа как double 1.0; fastexcel-reader возвращает '1.0'.
+     * Для cross-codeset lookup (E20) и человеческой читаемости нормализуем
+     * '1.0' / '10.00' → '1' / '10'. Не трогаем '1.5', 'AAA', '1Y', '-3.0' (но -3.0 → -3).
+     */
+    private static String normalizeCode(String s) {
+        if (s == null || s.isEmpty()) return s;
+        if (s.matches("-?\\d+\\.0+")) {
+            return s.substring(0, s.indexOf('.'));
+        }
+        return s;
     }
 
     private static double parseProbability(String cell, int rowIdx, String from, String to) {
