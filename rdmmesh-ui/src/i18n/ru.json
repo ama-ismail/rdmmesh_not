@@ -203,6 +203,8 @@
       "implicitDefaultHint": "Рекомендовано — публикация без явной D-колонки",
       "strict": "Strict — отклонить импорт",
       "strictHint": "Каждая строка обязана быть стохастичной (Σ = 1 ± 1e-3)",
+      "free": "Free — без проверки суммы",
+      "freeHint": "Для delinquency / flow-rate матриц, где Σ строки может быть любой (не вероятности)",
       "implicitDefaultAddedLabel": "+D-ячеек"
     }
   },

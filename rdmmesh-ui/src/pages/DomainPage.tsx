@@ -166,6 +166,25 @@ export function DomainPage() {
                   probability: { type: "number", minimum: 0, maximum: 1 },
                 },
               };
+            } else if (v.key_preset === "delinquency_matrix") {
+              keySpec = {
+                parts: [
+                  { name: "from_bucket", type: "STRING" },
+                  { name: "to_bucket", type: "STRING" },
+                  {
+                    name: "period",
+                    type: "ENUM",
+                    allowed_values: ["1M", "3M", "6M", "1Y"],
+                  },
+                ],
+              };
+              schema = {
+                type: "object",
+                required: ["probability"],
+                properties: {
+                  probability: { type: "number", minimum: 0, maximum: 1 },
+                },
+              };
             } else if (v.key_preset === "custom" && v.key_spec_json) {
               try {
                 keySpec = JSON.parse(v.key_spec_json);
@@ -219,6 +238,11 @@ export function DomainPage() {
                 {
                   value: "transition_matrix",
                   label: "Матрица миграций (from_rating, to_rating, horizon)",
+                },
+                {
+                  value: "delinquency_matrix",
+                  label:
+                    "Матрица просроченной задолженности — DPD (from_bucket, to_bucket, period)",
                 },
                 { value: "custom", label: "Custom (JSON)" },
               ]}

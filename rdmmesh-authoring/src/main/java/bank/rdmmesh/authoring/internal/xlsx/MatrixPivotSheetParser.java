@@ -45,6 +45,9 @@ import bank.rdmmesh.authoring.internal.csv.CsvBulkParser;
  *       Имя absorbing-колонки — по умолчанию {@code "D"} (можно переопределить).</li>
  *   <li>{@link RowResidualPolicy#STRICT} — бросит {@link IllegalArgumentException}
  *       с понятным сообщением и индексом строки.</li>
+ *   <li>{@link RowResidualPolicy#FREE} — сумма по строке вообще не проверяется
+ *       (для матриц, где ячейки — flow-rates, не вероятности; например DPD
+ *       delinquency matrix, где Σ строки может быть и 0.003, и 2.4).</li>
  * </ul>
  * IMPLICIT_DEFAULT выбран по умолчанию по согласованию с заказчиком: матрицы
  * публикуются без явной колонки D (residual = PD абсорбирующего состояния).
@@ -150,23 +153,28 @@ public final class MatrixPivotSheetParser {
                 sum += p;
                 out.add(buildTriple(from, to, p, rowIdxOut++));
             }
-            // Politika residual.
-            double residual = 1.0 - sum;
-            if (Math.abs(residual) > TOLERANCE) {
-                if (policy == RowResidualPolicy.IMPLICIT_DEFAULT && residual > 0) {
-                    out.add(buildTriple(from, absorbingCode, residual, rowIdxOut++));
-                    implicitAdded++;
-                } else {
-                    throw new IllegalArgumentException(
-                            "Row " + dataRowIdx + " (from='" + from + "'): сумма вероятностей "
-                                    + format(sum) + " не стохастична (ожидалось 1 ± " + TOLERANCE + ")."
-                                    + (policy == RowResidualPolicy.STRICT
-                                            ? " Включён STRICT — повторите импорт с"
-                                                    + " row_residual_policy=implicit_default,"
-                                                    + " если residual должен идти в "
-                                                    + absorbingCode + "."
-                                            : " IMPLICIT_DEFAULT применим только когда Σ < 1"
-                                                    + " (residual > 0), а здесь сумма уже превышает 1."));
+            // Политика residual. FREE — сумма не проверяется (flow-rates вместо вероятностей).
+            if (policy != RowResidualPolicy.FREE) {
+                double residual = 1.0 - sum;
+                if (Math.abs(residual) > TOLERANCE) {
+                    if (policy == RowResidualPolicy.IMPLICIT_DEFAULT && residual > 0) {
+                        out.add(buildTriple(from, absorbingCode, residual, rowIdxOut++));
+                        implicitAdded++;
+                    } else {
+                        throw new IllegalArgumentException(
+                                "Row " + dataRowIdx + " (from='" + from + "'): сумма вероятностей "
+                                        + format(sum) + " не стохастична (ожидалось 1 ± " + TOLERANCE + ")."
+                                        + (policy == RowResidualPolicy.STRICT
+                                                ? " Включён STRICT — повторите импорт с"
+                                                        + " row_residual_policy=implicit_default"
+                                                        + " (residual в " + absorbingCode + ") или"
+                                                        + " row_residual_policy=free (без проверки суммы,"
+                                                        + " для delinquency/flow-matrix)."
+                                                : " IMPLICIT_DEFAULT применим только когда Σ < 1"
+                                                        + " (residual > 0), а здесь сумма уже превышает 1."
+                                                        + " Используйте row_residual_policy=free, если"
+                                                        + " ячейки — flow-rates, а не вероятности."));
+                    }
                 }
             }
             dataRowIdx++;
@@ -239,7 +247,8 @@ public final class MatrixPivotSheetParser {
 
     public enum RowResidualPolicy {
         IMPLICIT_DEFAULT,
-        STRICT;
+        STRICT,
+        FREE;
 
         public static RowResidualPolicy parseOrDefault(String s) {
             if (s == null || s.isBlank()) return IMPLICIT_DEFAULT;
@@ -247,8 +256,10 @@ public final class MatrixPivotSheetParser {
             return switch (norm) {
                 case "IMPLICIT_DEFAULT", "IMPLICIT-DEFAULT", "IMPLICIT" -> IMPLICIT_DEFAULT;
                 case "STRICT" -> STRICT;
+                case "FREE", "FREE_FORM", "FREE-FORM", "NONE", "NO_CHECK" -> FREE;
                 default -> throw new IllegalArgumentException(
-                        "Unknown row_residual_policy='" + s + "'; allowed: implicit_default | strict");
+                        "Unknown row_residual_policy='" + s
+                                + "'; allowed: implicit_default | strict | free");
             };
         }
     }

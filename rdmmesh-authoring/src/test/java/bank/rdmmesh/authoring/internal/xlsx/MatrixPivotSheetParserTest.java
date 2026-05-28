@@ -133,8 +133,45 @@ class MatrixPivotSheetParserTest {
         assertThat(RowResidualPolicy.parseOrDefault("")).isEqualTo(RowResidualPolicy.IMPLICIT_DEFAULT);
         assertThat(RowResidualPolicy.parseOrDefault("implicit_default")).isEqualTo(RowResidualPolicy.IMPLICIT_DEFAULT);
         assertThat(RowResidualPolicy.parseOrDefault("Strict")).isEqualTo(RowResidualPolicy.STRICT);
+        assertThat(RowResidualPolicy.parseOrDefault("free")).isEqualTo(RowResidualPolicy.FREE);
+        assertThat(RowResidualPolicy.parseOrDefault("FREE_FORM")).isEqualTo(RowResidualPolicy.FREE);
+        assertThat(RowResidualPolicy.parseOrDefault("none")).isEqualTo(RowResidualPolicy.FREE);
         assertThatThrownBy(() -> RowResidualPolicy.parseOrDefault("foo"))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void free_policy_accepts_non_stochastic_delinquency_matrix() throws IOException {
+        // Пример заказчика — DPD flow-matrix: суммы строк {0.3, 0.0029, 0.0029, 2.41, 2.1}.
+        // С IMPLICIT_DEFAULT/STRICT строки 4-5 упали бы (Σ>1), но FREE их пропускает.
+        byte[] xlsx = workbook(sheet -> {
+            header(sheet, "", "0d", "1-30d", "31-90d", "91+d", "closed");
+            numRow(sheet, 1, "0d",     0.200, 0.100, 0.000, 0.000, 0.000); // Σ=0.300
+            numRow(sheet, 2, "1-30d",  0.002, 0.0008, 0.0001, 0.000, 0.000); // Σ=0.0029
+            numRow(sheet, 3, "31-90d", 0.002, 0.0008, 0.0001, 0.000, 0.000); // Σ=0.0029
+            numRow(sheet, 4, "91+d",   0.010, 0.600, 0.800, 1.000, 0.000); // Σ=2.41
+            numRow(sheet, 5, "closed", 0.700, 0.300, 0.100, 0.000, 1.000); // Σ=2.10
+        });
+        PivotParseResult result =
+                new MatrixPivotSheetParser(json, "1M", RowResidualPolicy.FREE).parse(in(xlsx));
+        // Пустые ячейки (=0.000) тоже создают triples в fastexcel — это норма для FREE.
+        // Главное: residual-колонки D НЕ дописаны, ничего не упало.
+        assertThat(result.implicitDefaultAdded()).isZero();
+        assertThat(result.rows()).isNotEmpty();
+        // Sample: проверяем «острую» ячейку 91+d → 91+d = 1.000.
+        assertThat(result.rows())
+                .filteredOn(r -> r.keyParts().equals(java.util.List.of("91+d", "91+d", "1M")))
+                .hasSize(1)
+                .first()
+                .satisfies(r -> assertThat(((Number) r.attributes().get("probability")).doubleValue())
+                        .isEqualTo(1.000));
+        // Sample: closed → closed = 1.000 (absorbing).
+        assertThat(result.rows())
+                .filteredOn(r -> r.keyParts().equals(java.util.List.of("closed", "closed", "1M")))
+                .hasSize(1)
+                .first()
+                .satisfies(r -> assertThat(((Number) r.attributes().get("probability")).doubleValue())
+                        .isEqualTo(1.000));
     }
 
     @Test

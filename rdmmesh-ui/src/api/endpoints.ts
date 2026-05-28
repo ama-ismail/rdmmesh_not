@@ -322,7 +322,10 @@ export const apiMutations = {
   bulkXlsxPivot: (
     versionId: string,
     file: Blob,
-    opts: { horizon: string; rowResidualPolicy: "implicit_default" | "strict" },
+    opts: {
+      horizon: string;
+      rowResidualPolicy: "implicit_default" | "strict" | "free";
+    },
   ) => {
     const qs = new URLSearchParams({
       layout: "pivot",

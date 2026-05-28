@@ -24,6 +24,35 @@ import type { CodeItem } from "@/api/types";
 // Незнакомые значения → в конец по алфавиту.
 const KNOWN_RATING_ORDER = ["AAA", "AA", "A", "BBB", "BB", "B", "CCC", "CC", "C", "D"] as const;
 
+// Стандартная банковская шкала DPD (Days Past Due). Используется для
+// delinquency-матриц — порядок «по тяжести просрочки», closed/current — терминал.
+const KNOWN_DPD_ORDER = [
+  "current",
+  "0d",
+  "0",
+  "1-30d",
+  "1-30",
+  "30d",
+  "31-60d",
+  "31-90d",
+  "60d",
+  "90d",
+  "90+d",
+  "91+d",
+  "default",
+  "closed",
+] as const;
+
+// Если в большинстве строк сумма далека от 1 — это не стохастическая матрица
+// (например delinquency flow-rates). В этом случае Σ-колонка не должна красниться:
+// сумма ≠ 1 для таких матриц — норма, не ошибка.
+function isStochasticMatrix(sums: number[]): boolean {
+  if (sums.length === 0) return true;
+  const eps = 1e-3;
+  const okCount = sums.filter((s) => Math.abs(s - 1) <= eps).length;
+  return okCount >= Math.max(1, Math.floor(sums.length / 2));
+}
+
 interface Props {
   items: CodeItem[];
 }
@@ -114,6 +143,9 @@ export function RatingTransitionPivotView({ items }: Props) {
     return { from, sum, isAbsorbing };
   });
 
+  // Если матрица не стохастическая (delinquency / flow-rates) — не красним Σ.
+  const stochastic = isStochasticMatrix(rows.map((r) => r.sum));
+
   const columns: TableColumnsType<Row> = [
     {
       title: t("pivot.fromHeader"),
@@ -151,7 +183,9 @@ export function RatingTransitionPivotView({ items }: Props) {
       align: "right",
       width: 90,
       render: (sum: number) => (
-        <strong style={{ color: stochasticColor(sum) }}>{fmt(sum)}</strong>
+        <strong style={{ color: stochastic ? stochasticColor(sum) : "inherit" }}>
+          {fmt(sum)}
+        </strong>
       ),
     },
   ];
@@ -205,14 +239,27 @@ function stochasticColor(sum: number): string {
 }
 
 function sortRatings(values: string[]): string[] {
-  const known = (v: string) => {
-    const idx = (KNOWN_RATING_ORDER as readonly string[]).indexOf(v);
-    return idx >= 0 ? idx : Number.MAX_SAFE_INTEGER;
+  // Сначала пробуем DPD-порядок (delinquency), потом rating-порядок, потом alpha.
+  // Префиксное сравнение для DPD устойчиво к регистру и пробелам.
+  const norm = (v: string) => v.trim().toLowerCase();
+  const dpdIdx = (v: string) => {
+    const n = norm(v);
+    const idx = (KNOWN_DPD_ORDER as readonly string[]).indexOf(n);
+    return idx >= 0 ? idx : -1;
   };
+  const ratingIdx = (v: string) => (KNOWN_RATING_ORDER as readonly string[]).indexOf(v);
+
+  const dpdHits = values.filter((v) => dpdIdx(v) >= 0).length;
+  const ratingHits = values.filter((v) => ratingIdx(v) >= 0).length;
+  const useDpd = dpdHits >= ratingHits && dpdHits > 0;
+
+  const key = useDpd ? dpdIdx : ratingIdx;
   return [...values].sort((a, b) => {
-    const ka = known(a);
-    const kb = known(b);
-    if (ka !== kb) return ka - kb;
+    const ka = key(a);
+    const kb = key(b);
+    const ea = ka < 0 ? Number.MAX_SAFE_INTEGER : ka;
+    const eb = kb < 0 ? Number.MAX_SAFE_INTEGER : kb;
+    if (ea !== eb) return ea - eb;
     return a.localeCompare(b);
   });
 }

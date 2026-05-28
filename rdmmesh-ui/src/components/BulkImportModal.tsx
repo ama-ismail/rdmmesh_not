@@ -34,7 +34,7 @@ import type { BulkImportError, BulkImportResult } from "@/api/types";
 // backend вернёт validation error (key_parts size mismatch). Это лучше, чем
 // прятать таб и заставлять пользователя угадывать про скрытые теги.
 const PIVOT_HORIZONS = ["1M", "3M", "6M", "1Y", "3Y", "5Y"] as const;
-type PivotResidualPolicy = "implicit_default" | "strict";
+type PivotResidualPolicy = "implicit_default" | "strict" | "free";
 
 interface Props {
   versionId: string;
@@ -418,6 +418,12 @@ function BulkImportModal({
                               {t("bulk.pivot.strict")}
                               <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
                                 ({t("bulk.pivot.strictHint")})
+                              </Typography.Text>
+                            </Radio>
+                            <Radio value="free">
+                              {t("bulk.pivot.free")}
+                              <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                                ({t("bulk.pivot.freeHint")})
                               </Typography.Text>
                             </Radio>
                           </Space>

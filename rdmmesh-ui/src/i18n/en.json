@@ -203,6 +203,8 @@
       "implicitDefaultHint": "Recommended — matches publishing without explicit D",
       "strict": "Strict — reject import",
       "strictHint": "Every row must be stochastic (Σ = 1 ± 1e-3)",
+      "free": "Free — no sum check",
+      "freeHint": "For delinquency / flow-rate matrices where row Σ can be anything (cells aren't probabilities)",
       "implicitDefaultAddedLabel": "+D cells"
     }
   },
