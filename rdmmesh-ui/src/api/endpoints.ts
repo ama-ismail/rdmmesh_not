@@ -467,6 +467,17 @@ export const adminApi = {
 
   // Tasks
   myAdminTasks: () => apiFetch<AdminTaskView[]>("/admin/tasks/my"),
+
+  // E22 — admin queue заявок на удаление CodeSet'а.
+  listDeletionRequests: (status: DeletionRequestStatus = "PENDING") =>
+    apiFetch<DeletionRequestView[]>(
+      `/admin/deletion-requests?status=${encodeURIComponent(status)}`,
+    ),
+};
+
+// E22 — author-side: список моих заявок (любой статус).
+export const deletionRequestsApi = {
+  listMy: () => apiFetch<DeletionRequestView[]>("/deletion-requests/my"),
 };
 
 export const adminMutations = {
@@ -530,7 +541,58 @@ export const adminMutations = {
       method: "POST",
       body: JSON.stringify({ action, notes: notes ?? null }),
     }),
+
+  // E22 — заявки на удаление CodeSet'а.
+  submitDeletionRequest: (codesetId: string, reason: string) =>
+    apiFetch<DeletionRequestView>(
+      `/codesets/${codesetId}/deletion-requests`,
+      { method: "POST", body: JSON.stringify({ reason }) },
+    ),
+  cancelDeletionRequest: (id: string) =>
+    apiFetch<void>(`/deletion-requests/${id}:cancel`, {
+      method: "POST",
+      body: "{}",
+    }),
+  approveDeletionRequest: (
+    id: string,
+    body: { decision_comment?: string | null; force_archive?: boolean },
+  ) =>
+    apiFetch<void>(`/admin/deletion-requests/${id}:approve`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  rejectDeletionRequest: (id: string, decisionComment: string) =>
+    apiFetch<void>(`/admin/deletion-requests/${id}:reject`, {
+      method: "POST",
+      body: JSON.stringify({ decision_comment: decisionComment }),
+    }),
 };
+
+// E22 — типы заявок.
+export type DeletionRequestStatus =
+  | "PENDING"
+  | "APPROVED"
+  | "REJECTED"
+  | "CANCELLED";
+
+export interface DeletionRequestView {
+  id: string;
+  codeset_id: string;
+  codeset_name: string;
+  domain_id: string;
+  domain_name: string;
+  requested_by: string;
+  requested_by_username: string | null;
+  reason: string;
+  status: DeletionRequestStatus;
+  decided_by: string | null;
+  decided_by_username: string | null;
+  decision_comment: string | null;
+  created_at: string;
+  decided_at: string | null;
+  codeset_deleted: boolean;
+  has_published_versions: boolean;
+}
 
 // Возвращается из POST /versions/{id}/closure/rebuild (Java record, camelCase).
 export interface ClosureRebuildResult {

@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import {
   ApiOutlined,
   AppstoreOutlined,
+  DeleteOutlined,
   FileSearchOutlined,
   ProfileOutlined,
   ClusterOutlined,
@@ -30,13 +31,15 @@ export function AppLayout() {
 
   const selected = pathname.startsWith("/admin/domains")
     ? "admin-domains"
-    : pathname.startsWith("/admin/subscriptions")
-      ? "subscriptions"
-      : pathname.startsWith("/admin/audit")
-        ? "audit"
-        : pathname.startsWith("/tasks")
-          ? "tasks"
-          : "catalog";
+    : pathname.startsWith("/admin/deletion-requests")
+      ? "admin-deletion-requests"
+      : pathname.startsWith("/admin/subscriptions")
+        ? "subscriptions"
+        : pathname.startsWith("/admin/audit")
+          ? "audit"
+          : pathname.startsWith("/tasks")
+            ? "tasks"
+            : "catalog";
 
   const items: MenuProps["items"] = useMemo(() => {
     const main: MenuProps["items"] = [
@@ -58,6 +61,15 @@ export function AppLayout() {
         key: "admin-domains",
         icon: <ClusterOutlined />,
         label: <Link to="/admin/domains">{t("nav.adminDomains")}</Link>,
+      });
+      adminChildren.push({
+        key: "admin-deletion-requests",
+        icon: <DeleteOutlined />,
+        label: (
+          <Link to="/admin/deletion-requests">
+            {t("nav.adminDeletionRequests")}
+          </Link>
+        ),
       });
       adminChildren.push({
         key: "subscriptions",

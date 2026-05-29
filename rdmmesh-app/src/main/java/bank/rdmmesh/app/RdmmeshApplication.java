@@ -138,6 +138,12 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         environment.jersey().register(adminResources.codeSets());
         environment.jersey().register(adminResources.userSearch());
         environment.jersey().register(adminResources.tasks());
+        // E22 — author-facing (RDM_AUTHOR submit/my/cancel) + admin-facing queue.
+        // Submit живёт в отдельном root resource'е с @Path("/codesets/{codesetId}/deletion-requests"),
+        // чтобы выиграть JAX-RS routing у CodeSetResource (@Path("/codesets")).
+        environment.jersey().register(adminResources.deletionRequests());
+        environment.jersey().register(adminResources.codeSetDeletionRequests());
+        environment.jersey().register(adminResources.adminDeletionRequests());
 
         CatalogReadPort catalogReadPort = CatalogModule.buildReadPort(jdbi);
         // EventBus создаётся раньше: E14 round 11 — ClosureAdminResource

@@ -27,6 +27,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { ApiError } from "@/api/client";
 import { Loader } from "@/components/Loader";
 import { StatusTag } from "@/components/StatusTag";
+import { RequestDeletionButton } from "@/components/RequestDeletionButton";
 import type { CodeSetVersion, VersionStatus } from "@/api/types";
 
 // non-terminal статусы блокируют создание новой DRAFT'а — это at-most-one-open инвариант
@@ -115,7 +116,7 @@ export function CodeSetPage() {
         title={t("catalog.codeset")}
         style={{ marginBottom: 16 }}
         extra={
-          isAdmin && (
+          isAdmin ? (
             <Space>
               <Button size="small" onClick={() => setRenameOpen(true)}>
                 Rename
@@ -130,6 +131,9 @@ export function CodeSetPage() {
                 </Button>
               </Popconfirm>
             </Space>
+          ) : (
+            // E22 — non-admin (Author) кидает заявку Admin'у на soft-delete.
+            <RequestDeletionButton codesetId={id} />
           )
         }
       >

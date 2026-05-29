@@ -10,7 +10,8 @@
     "admin": "Админ",
     "subscriptions": "Subscriptions",
     "audit": "Audit log",
-    "adminDomains": "Домены (admin)"
+    "adminDomains": "Домены (admin)",
+    "adminDeletionRequests": "Заявки на удаление"
   },
   "common": {
     "loading": "Загрузка...",
@@ -19,7 +20,50 @@
     "back": "Назад",
     "yes": "Да",
     "no": "Нет",
-    "verify": "Проверить подпись"
+    "verify": "Проверить подпись",
+    "more": "ещё"
+  },
+  "deletionRequest": {
+    "requestButton": "Запросить удаление",
+    "modalTitle": "Заявка на удаление справочника",
+    "modalDescription": "Заявка отправляется администратору. Опишите причину — это попадает в audit-журнал. Удаление обратимо только через вторую заявку на восстановление.",
+    "reasonLabel": "Причина (10–2000 символов)",
+    "reasonPlaceholder": "Справочник создан по ошибке, корректная замена — codeset XYZ…",
+    "reasonRequired": "Укажите причину",
+    "reasonLength": "Длина причины должна быть от {{min}} до {{max}} символов",
+    "submitButton": "Отправить",
+    "submitSuccess": "Заявка отправлена администратору",
+    "pendingTag": "Заявка на удаление: PENDING",
+    "cancelButton": "Отозвать",
+    "cancelSuccess": "Заявка отозвана",
+    "admin": {
+      "title": "Очередь заявок на удаление CodeSet'ов",
+      "approve": "Approve (удалить)",
+      "reject": "Reject",
+      "approveTitle": "Подтвердить удаление справочника",
+      "approveConfirm": "Будет выполнен soft-delete справочника «{{codeset}}». PUBLISHED-версии (если есть) остаются в БД для regulator reproducibility.",
+      "softDeleteHint": "Soft-delete: catalog.code_set.deleted_at = now(). Восстановление — отдельной операцией admin'а.",
+      "rejectTitle": "Отклонить заявку",
+      "approveSuccess": "Заявка одобрена, CodeSet удалён",
+      "rejectSuccess": "Заявка отклонена",
+      "forceArchive": "force_archive: удалить несмотря на PUBLISHED-версии",
+      "forceArchiveHint": "Без этой галочки backend вернёт 409 при наличии PUBLISHED-версий (защита от случайного удаления regulator-relevant данных).",
+      "decisionCommentOptional": "Комментарий (опционально)",
+      "decisionCommentRequired": "Причина отклонения (обязательно, 10–2000 символов)",
+      "decisionCommentRule": "Комментарий должен быть от {{min}} до {{max}} символов",
+      "alreadyDeleted": "уже удалён",
+      "published": "есть PUBLISHED",
+      "publishedHint": "У CodeSet'а есть PUBLISHED-версии. Approve потребует force_archive=true.",
+      "col": {
+        "domain": "Домен",
+        "codeset": "CodeSet",
+        "reason": "Причина",
+        "requestedBy": "Кто",
+        "createdAt": "Когда",
+        "status": "Статус",
+        "decision": "Решение"
+      }
+    }
   },
   "login": {
     "headline": "Вход в rdmmesh",

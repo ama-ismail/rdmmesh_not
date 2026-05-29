@@ -10,7 +10,8 @@
     "admin": "Admin",
     "subscriptions": "Subscriptions",
     "audit": "Audit log",
-    "adminDomains": "Admin domains"
+    "adminDomains": "Admin domains",
+    "adminDeletionRequests": "Deletion requests"
   },
   "common": {
     "loading": "Loading...",
@@ -19,7 +20,50 @@
     "back": "Back",
     "yes": "Yes",
     "no": "No",
-    "verify": "Verify signature"
+    "verify": "Verify signature",
+    "more": "more"
+  },
+  "deletionRequest": {
+    "requestButton": "Request deletion",
+    "modalTitle": "CodeSet deletion request",
+    "modalDescription": "The request is sent to an administrator. Explain the reason — it goes into the audit log. Deletion is reversible only via a separate restoration request.",
+    "reasonLabel": "Reason (10–2000 characters)",
+    "reasonPlaceholder": "CodeSet was created by mistake, correct replacement — codeset XYZ…",
+    "reasonRequired": "Reason is required",
+    "reasonLength": "Reason length must be between {{min}} and {{max}} characters",
+    "submitButton": "Submit",
+    "submitSuccess": "Request sent to admin",
+    "pendingTag": "Deletion request: PENDING",
+    "cancelButton": "Cancel",
+    "cancelSuccess": "Request cancelled",
+    "admin": {
+      "title": "CodeSet deletion request queue",
+      "approve": "Approve (delete)",
+      "reject": "Reject",
+      "approveTitle": "Confirm CodeSet deletion",
+      "approveConfirm": "CodeSet \"{{codeset}}\" will be soft-deleted. PUBLISHED versions (if any) remain in DB for regulator reproducibility.",
+      "softDeleteHint": "Soft-delete: catalog.code_set.deleted_at = now(). Restoration is a separate admin operation.",
+      "rejectTitle": "Reject request",
+      "approveSuccess": "Request approved, CodeSet deleted",
+      "rejectSuccess": "Request rejected",
+      "forceArchive": "force_archive: delete despite PUBLISHED versions",
+      "forceArchiveHint": "Without this checkbox backend returns 409 when PUBLISHED versions exist (guard against accidental deletion of regulator-relevant data).",
+      "decisionCommentOptional": "Comment (optional)",
+      "decisionCommentRequired": "Rejection reason (required, 10–2000 characters)",
+      "decisionCommentRule": "Comment must be between {{min}} and {{max}} characters",
+      "alreadyDeleted": "already deleted",
+      "published": "has PUBLISHED",
+      "publishedHint": "CodeSet has PUBLISHED versions. Approve will require force_archive=true.",
+      "col": {
+        "domain": "Domain",
+        "codeset": "CodeSet",
+        "reason": "Reason",
+        "requestedBy": "By",
+        "createdAt": "When",
+        "status": "Status",
+        "decision": "Decision"
+      }
+    }
   },
   "login": {
     "headline": "Sign in to rdmmesh",

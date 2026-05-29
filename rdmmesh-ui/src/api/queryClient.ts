@@ -60,6 +60,12 @@ export const qk = {
     codesetOwnership: (id: string) => ["admin", "codesets", id, "ownership"] as const,
     userSearch: (q: string) => ["admin", "users", "search", q] as const,
     tasksMy: () => ["admin", "tasks", "my"] as const,
+    // E22 — admin queue заявок на удаление.
+    deletionRequests: (status: string) => ["admin", "deletion-requests", status] as const,
+  },
+  // E22 — author-side: «мои заявки на удаление».
+  deletionRequests: {
+    my: () => ["deletion-requests", "my"] as const,
   },
   subscriptions: {
     all: () => ["subscriptions"] as const,

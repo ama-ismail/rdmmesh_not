@@ -3,14 +3,18 @@ package bank.rdmmesh.admin;
 import org.jdbi.v3.core.Jdbi;
 
 import bank.rdmmesh.admin.internal.AdminCodeSetService;
+import bank.rdmmesh.admin.internal.AdminDeletionRequestService;
 import bank.rdmmesh.admin.internal.AdminDomainService;
 import bank.rdmmesh.admin.internal.AdminOwnershipService;
 import bank.rdmmesh.admin.internal.AdminTaskService;
 import bank.rdmmesh.admin.resource.AdminCodeSetResource;
+import bank.rdmmesh.admin.resource.AdminDeletionRequestResource;
 import bank.rdmmesh.admin.resource.AdminDomainResource;
 import bank.rdmmesh.admin.resource.AdminOwnershipResource;
 import bank.rdmmesh.admin.resource.AdminTaskResource;
 import bank.rdmmesh.admin.resource.AdminUserSearchResource;
+import bank.rdmmesh.admin.resource.CodeSetDeletionRequestResource;
+import bank.rdmmesh.admin.resource.DeletionRequestResource;
 
 /**
  * Composition factory для rdmmesh-admin (E18, ADR-0011).
@@ -29,12 +33,16 @@ public final class AdminModule {
         AdminOwnershipService ownership = new AdminOwnershipService(jdbi);
         AdminCodeSetService codeSets = new AdminCodeSetService(jdbi);
         AdminTaskService tasks = new AdminTaskService(jdbi);
+        AdminDeletionRequestService deletionRequests = new AdminDeletionRequestService(jdbi, codeSets);
         return new Resources(
                 new AdminDomainResource(domains, ownership),
                 new AdminOwnershipResource(ownership),
                 new AdminCodeSetResource(codeSets, ownership),
                 new AdminUserSearchResource(jdbi),
-                new AdminTaskResource(tasks));
+                new AdminTaskResource(tasks),
+                new DeletionRequestResource(deletionRequests),
+                new CodeSetDeletionRequestResource(deletionRequests),
+                new AdminDeletionRequestResource(deletionRequests));
     }
 
     public record Resources(
@@ -42,5 +50,8 @@ public final class AdminModule {
             AdminOwnershipResource ownership,
             AdminCodeSetResource codeSets,
             AdminUserSearchResource userSearch,
-            AdminTaskResource tasks) {}
+            AdminTaskResource tasks,
+            DeletionRequestResource deletionRequests,
+            CodeSetDeletionRequestResource codeSetDeletionRequests,
+            AdminDeletionRequestResource adminDeletionRequests) {}
 }
