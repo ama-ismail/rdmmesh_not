@@ -158,6 +158,36 @@ public final class CodeItemResource {
         return Response.noContent().build();
     }
 
+    /**
+     * E21 — clear-all items DRAFT-версии. Защищено обязательным
+     * {@code ?confirm=clear-all} — это значит, что случайный {@code curl -X DELETE}
+     * на коллекцию items без параметра вернёт 400, а не молчаливое уничтожение.
+     * UI-кнопка добавляет параметр после двухступенчатого подтверждения.
+     */
+    @DELETE
+    @RolesAllowed({"RDM_AUTHOR", "RDM_ADMIN"})
+    public ClearAllResponse clearAll(
+            @Auth RdmmeshPrincipal principal,
+            @PathParam("versionId") String versionId,
+            @QueryParam("confirm") String confirm) {
+        if (!"clear-all".equals(confirm)) {
+            throw new WebApplicationException(
+                    "confirm=clear-all is required to wipe the version", Response.Status.BAD_REQUEST);
+        }
+        UUID v = parseUuid(versionId, "versionId");
+        int deleted;
+        try {
+            deleted = authoring.clearAllItems(v, principal.omUserId());
+        } catch (IllegalArgumentException e) {
+            throw new WebApplicationException(e.getMessage(), Response.Status.NOT_FOUND);
+        } catch (IllegalStateException e) {
+            throw new WebApplicationException(e.getMessage(), Response.Status.CONFLICT);
+        }
+        return new ClearAllResponse(deleted);
+    }
+
+    public record ClearAllResponse(@JsonProperty("deleted") int deleted) {}
+
     @POST
     @Path("/bulk")
     @RolesAllowed({"RDM_AUTHOR", "RDM_ADMIN"})

@@ -31,6 +31,7 @@ import { WorkflowActions } from "@/components/WorkflowActions";
 import { AddItemButton } from "@/components/AddItemModal";
 import { DeleteDraftButton } from "@/components/DeleteDraftButton";
 import { BulkImportButton } from "@/components/BulkImportModal";
+import { ClearAllItemsButton } from "@/components/ClearAllItemsButton";
 import { DiffButton } from "@/components/DiffViewer";
 import { ConsumerViewButton } from "@/components/ConsumerViewDrawer";
 import { HierarchyTree } from "@/components/HierarchyTree";
@@ -198,6 +199,9 @@ export function VersionPage() {
             <Space>
               <BulkImportButton versionId={vid} codesetId={version.data.codeset_id} />
               <AddItemButton versionId={vid} codesetId={version.data.codeset_id} />
+              {(version.data.item_count ?? 0) > 0 && (
+                <ClearAllItemsButton versionId={vid} />
+              )}
             </Space>
           )
         }

@@ -346,6 +346,30 @@ public final class AuthoringService {
         });
     }
 
+    /**
+     * E21 — bulk-delete всех items в DRAFT. Используется UI-кнопкой «Очистить
+     * все записи» перед повторным bulk-import'ом. Closure-table вычищается
+     * row-by-row AFTER-DELETE триггером (V022); {@code item_count} сбрасывается
+     * в 0 в той же транзакции.
+     *
+     * <p>DRAFT-проверка двойная: service ({@link #loadDraftContext}) и DAO
+     * (EXISTS-clause в {@link CodeItemDao#deleteAllInDraft}).
+     *
+     * @return количество удалённых items (0 если версия уже была пуста)
+     * @throws IllegalArgumentException если версии нет
+     * @throws IllegalStateException    если версия не DRAFT
+     */
+    public int clearAllItems(UUID versionId, UUID actor) {
+        loadDraftContext(versionId);
+        return jdbi.inTransaction(handle -> {
+            CodeItemDao dao = handle.attach(CodeItemDao.class);
+            int deleted = dao.deleteAllInDraft(versionId);
+            handle.attach(CodeSetVersionDao.class).setItemCount(versionId, 0);
+            log.info("authoring: clear-all items version_id={} deleted={} by={}", versionId, deleted, actor);
+            return deleted;
+        });
+    }
+
     // ── Bulk import ─────────────────────────────────────────────────────────────
 
     /**

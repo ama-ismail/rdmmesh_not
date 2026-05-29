@@ -124,6 +124,14 @@
     "viewGrid": "Таблица",
     "viewTree": "Дерево",
     "viewPivot": "Матрица",
+    "clearAll": {
+      "button": "Очистить все записи",
+      "title": "Удалить все записи DRAFT-версии?",
+      "description": "Все CodeItem'ы этой DRAFT-версии будут удалены. Сама версия (semver, статус DRAFT) сохранится — её можно будет заполнить снова через Add или Bulk import. Действие необратимо.",
+      "confirmHint": "Для подтверждения введите фразу:",
+      "okText": "Удалить всё",
+      "success": "Удалено {{n}} записей"
+    },
     "statusValues": {
       "ACTIVE": "ACTIVE",
       "RETIRED": "RETIRED"

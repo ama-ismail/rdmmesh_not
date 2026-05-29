@@ -151,8 +151,22 @@ public interface CodeItemDao {
             """)
     int deleteInDraft(@Bind("id") UUID id);
 
-    @SqlUpdate("DELETE FROM authoring.code_item WHERE version_id = :versionId")
-    int deleteAllInVersion(@Bind("versionId") UUID versionId);
+    /**
+     * Bulk-delete всех items DRAFT-версии (E21). EXISTS-clause страхует от
+     * случайного удаления items уже опубликованной/в-ревью версии — даже если
+     * service-слой почему-то не проверил {@code loadDraftContext}. Возвращает
+     * количество удалённых строк.
+     */
+    @SqlUpdate(
+            """
+            DELETE FROM authoring.code_item
+             WHERE version_id = :versionId
+               AND EXISTS (
+                       SELECT 1 FROM authoring.code_set_version v
+                        WHERE v.id = :versionId
+                          AND v.status = 'DRAFT')
+            """)
+    int deleteAllInDraft(@Bind("versionId") UUID versionId);
 
     record ItemRow(
             UUID id,

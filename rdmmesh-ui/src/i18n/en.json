@@ -124,6 +124,14 @@
     "viewGrid": "Grid",
     "viewTree": "Tree",
     "viewPivot": "Matrix",
+    "clearAll": {
+      "button": "Clear all items",
+      "title": "Delete all items of this DRAFT version?",
+      "description": "All CodeItems of this DRAFT will be removed. The version itself (semver, DRAFT status) is preserved — you can refill it via Add or Bulk import. This action is irreversible.",
+      "confirmHint": "Type this phrase to confirm:",
+      "okText": "Clear all",
+      "success": "{{n}} items deleted"
+    },
     "statusValues": {
       "ACTIVE": "ACTIVE",
       "RETIRED": "RETIRED"

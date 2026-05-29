@@ -287,6 +287,13 @@ export const apiMutations = {
   deleteItem: (versionId: string, itemId: string) =>
     apiFetch<void>(`/versions/${versionId}/items/${itemId}`, { method: "DELETE" }),
 
+  // E21 — bulk clear: удалить все items DRAFT-версии. confirm=clear-all обязателен.
+  clearAllItems: (versionId: string) =>
+    apiFetch<{ deleted: number }>(
+      `/versions/${versionId}/items?confirm=clear-all`,
+      { method: "DELETE" },
+    ),
+
   // E11.2b — bulk import
   bulkJson: (versionId: string, rows: NewItemBody[]) =>
     apiFetch<BulkImportResult>(`/versions/${versionId}/items/bulk`, {
