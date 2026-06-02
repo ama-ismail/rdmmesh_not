@@ -14,7 +14,13 @@ import {
   App as AntApp,
   type TableColumnsType,
 } from "antd";
-import { CheckOutlined, CloseOutlined, DeleteOutlined, EditOutlined } from "@ant-design/icons";
+import {
+  CheckOutlined,
+  CloseOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  SearchOutlined,
+} from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import dayjs, { type Dayjs } from "dayjs";
@@ -74,11 +80,35 @@ function formatParentKey(pk: string[] | null | undefined): string {
   return pk.length === 1 ? pk[0] : JSON.stringify(pk);
 }
 
+// E23: клиентский поиск по записям. Собираем все значимые поля строки в одну
+// строку и ищем подстроку без учёта регистра. Покрываем ключ, parent_key,
+// label/description (ru/en), статус, order_index и значения всех атрибутов.
+function itemMatchesQuery(it: CodeItem, query: string): boolean {
+  if (!query) return true;
+  const haystack: string[] = [
+    Array.isArray(it.key_parts) ? it.key_parts.join(" ") : String(it.key_parts ?? ""),
+    formatParentKey(it.parent_key),
+    it.label_ru ?? "",
+    it.label_en ?? "",
+    it.description_ru ?? "",
+    it.description_en ?? "",
+    it.status ?? "",
+    it.order_index != null ? String(it.order_index) : "",
+  ];
+  if (it.attributes) {
+    for (const [k, v] of Object.entries(it.attributes)) {
+      haystack.push(k, formatAttr(v));
+    }
+  }
+  return haystack.join("").toLowerCase().includes(query);
+}
+
 export function ItemsTable({ items, editable = false, versionId, codesetId }: Props) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { message } = AntApp.useApp();
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
   const [form] = Form.useForm<EditFormValues>();
 
   // Сбросить cache invalidation после mutation'ов; reused и patch'ем, и delete'ом.
@@ -196,6 +226,14 @@ export function ItemsTable({ items, editable = false, versionId, codesetId }: Pr
     }
     return Array.from(keys).sort();
   }, [items]);
+
+  // E23: отфильтрованный набор для отрисовки. Редактируемую строку не прячем,
+  // даже если она перестала матчить запрос, — иначе inline-edit «исчезнет».
+  const filteredItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((it) => it.id === editingId || itemMatchesQuery(it, q));
+  }, [items, search, editingId]);
 
   const columns: TableColumnsType<CodeItem> = useMemo(() => {
     const isEditing = (id: string) => editingId === id;
@@ -472,10 +510,23 @@ export function ItemsTable({ items, editable = false, versionId, codesetId }: Pr
     rowExpandable: () => true,
   };
 
+  const searchBar = (
+    <div style={{ marginBottom: 12, maxWidth: 360 }}>
+      <Input
+        allowClear
+        size="small"
+        prefix={<SearchOutlined />}
+        placeholder={t("items.searchPlaceholder")}
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+    </div>
+  );
+
   const table = (
     <Table<CodeItem>
       rowKey={(r) => r.id}
-      dataSource={items}
+      dataSource={filteredItems}
       columns={columns}
       size="small"
       pagination={false}
@@ -485,8 +536,15 @@ export function ItemsTable({ items, editable = false, versionId, codesetId }: Pr
     />
   );
 
-  if (!editable) return table;
-  return <Form form={form}>{table}</Form>;
+  const content = (
+    <>
+      {searchBar}
+      {table}
+    </>
+  );
+
+  if (!editable) return content;
+  return <Form form={form}>{content}</Form>;
 }
 
 function formatAttr(v: unknown): string {

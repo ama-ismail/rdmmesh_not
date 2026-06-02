@@ -168,6 +168,7 @@
     "viewGrid": "Таблица",
     "viewTree": "Дерево",
     "viewPivot": "Матрица",
+    "searchPlaceholder": "Поиск по записям…",
     "clearAll": {
       "button": "Очистить все записи",
       "title": "Удалить все записи DRAFT-версии?",
