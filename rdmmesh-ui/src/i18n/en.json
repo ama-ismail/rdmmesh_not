@@ -177,6 +177,15 @@
       "okText": "Clear all",
       "success": "{{n}} items deleted"
     },
+    "bulkDelete": {
+      "button": "Delete selected",
+      "selected": "Selected: {{n}}",
+      "clearSelection": "Clear selection",
+      "confirmTitle": "Delete selected items?",
+      "confirmDescription": "{{n}} item(s) will be deleted. This action is irreversible.",
+      "success": "{{n}} items deleted",
+      "partial": "Deleted {{ok}}, failed {{failed}}"
+    },
     "statusValues": {
       "ACTIVE": "ACTIVE",
       "RETIRED": "RETIRED"

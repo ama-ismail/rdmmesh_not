@@ -109,6 +109,8 @@ export function ItemsTable({ items, editable = false, versionId, codesetId }: Pr
   const { message } = AntApp.useApp();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  // E23: выбор нескольких строк для массового удаления (только DRAFT).
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [form] = Form.useForm<EditFormValues>();
 
   // Сбросить cache invalidation после mutation'ов; reused и patch'ем, и delete'ом.
@@ -149,6 +151,37 @@ export function ItemsTable({ items, editable = false, versionId, codesetId }: Pr
     mutationFn: (itemId: string) => apiMutations.deleteItem(versionId!, itemId),
     onSuccess: () => {
       message.success(t("items.deleteSuccess"));
+      invalidate();
+    },
+    onError: (e: unknown) => {
+      const msg = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
+      message.error(msg);
+    },
+  });
+
+  // E23: массовое удаление выбранных записей. Bulk-by-ids эндпоинта нет, поэтому
+  // шлём DELETE по одной; собираем число успехов/ошибок, чтобы показать итог.
+  const bulkRemove = useMutation({
+    mutationFn: async (ids: React.Key[]) => {
+      let ok = 0;
+      let failed = 0;
+      for (const id of ids) {
+        try {
+          await apiMutations.deleteItem(versionId!, String(id));
+          ok += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      return { ok, failed };
+    },
+    onSuccess: ({ ok, failed }) => {
+      if (failed > 0) {
+        message.warning(t("items.bulkDelete.partial", { ok, failed }));
+      } else {
+        message.success(t("items.bulkDelete.success", { n: ok }));
+      }
+      setSelectedRowKeys([]);
       invalidate();
     },
     onError: (e: unknown) => {
@@ -510,8 +543,28 @@ export function ItemsTable({ items, editable = false, versionId, codesetId }: Pr
     rowExpandable: () => true,
   };
 
-  const searchBar = (
-    <div style={{ marginBottom: 12, maxWidth: 360 }}>
+  // E23: выбор строк галочками доступен только в editable (DRAFT) режиме.
+  // Чекбокс редактируемой строки блокируем, чтобы не удалить её во время правки.
+  const rowSelection = editable
+    ? {
+        selectedRowKeys,
+        onChange: (keys: React.Key[]) => setSelectedRowKeys(keys),
+        getCheckboxProps: (row: CodeItem) => ({
+          disabled: editingId !== null && editingId !== row.id,
+        }),
+      }
+    : undefined;
+
+  const toolbar = (
+    <div
+      style={{
+        marginBottom: 12,
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        flexWrap: "wrap",
+      }}
+    >
       <Input
         allowClear
         size="small"
@@ -519,7 +572,34 @@ export function ItemsTable({ items, editable = false, versionId, codesetId }: Pr
         placeholder={t("items.searchPlaceholder")}
         value={search}
         onChange={(e) => setSearch(e.target.value)}
+        style={{ maxWidth: 360 }}
       />
+      {editable && selectedRowKeys.length > 0 && (
+        <Space size={8}>
+          <span>{t("items.bulkDelete.selected", { n: selectedRowKeys.length })}</span>
+          <Popconfirm
+            title={t("items.bulkDelete.confirmTitle")}
+            description={t("items.bulkDelete.confirmDescription", { n: selectedRowKeys.length })}
+            okText={t("version.deleteConfirmOk")}
+            okButtonProps={{ danger: true }}
+            cancelText={t("workflow.modal.cancel")}
+            onConfirm={() => bulkRemove.mutate(selectedRowKeys)}
+          >
+            <Button
+              danger
+              size="small"
+              icon={<DeleteOutlined />}
+              loading={bulkRemove.isPending}
+              disabled={editingId !== null}
+            >
+              {t("items.bulkDelete.button")}
+            </Button>
+          </Popconfirm>
+          <Button size="small" onClick={() => setSelectedRowKeys([])}>
+            {t("items.bulkDelete.clearSelection")}
+          </Button>
+        </Space>
+      )}
     </div>
   );
 
@@ -533,12 +613,13 @@ export function ItemsTable({ items, editable = false, versionId, codesetId }: Pr
       scroll={{ x: "max-content", y: 480 }}
       sticky
       expandable={expandable}
+      rowSelection={rowSelection}
     />
   );
 
   const content = (
     <>
-      {searchBar}
+      {toolbar}
       {table}
     </>
   );
