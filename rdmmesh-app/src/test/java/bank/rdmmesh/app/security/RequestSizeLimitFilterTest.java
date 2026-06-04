@@ -28,10 +28,14 @@ final class RequestSizeLimitFilterTest {
     private final RequestSizeLimitFilter filter = new RequestSizeLimitFilter();
 
     private ContainerRequestContext ctxWith(String contentLength) {
+        return ctxWith(contentLength, "/webhooks/om/ownership");
+    }
+
+    private ContainerRequestContext ctxWith(String contentLength, String path) {
         ContainerRequestContext ctx = mock(ContainerRequestContext.class);
         when(ctx.getHeaderString(HttpHeaders.CONTENT_LENGTH)).thenReturn(contentLength);
         UriInfo uri = mock(UriInfo.class);
-        lenient().when(uri.getPath()).thenReturn("/webhooks/om/ownership");
+        lenient().when(uri.getPath()).thenReturn(path);
         lenient().when(ctx.getUriInfo()).thenReturn(uri);
         lenient().when(ctx.getMethod()).thenReturn("POST");
         return ctx;
@@ -81,5 +85,29 @@ final class RequestSizeLimitFilterTest {
         ContainerRequestContext ctx = ctxWith(Long.toString(RequestSizeLimitFilter.MAX_BODY_BYTES));
         filter.filter(ctx);
         verify(ctx, never()).abortWith(any());
+    }
+
+    @Test
+    void bulkImportPathAllowsLargerBody() throws IOException {
+        // 3 MiB — больше общего 1 MiB, но в пределах import-лимита (25 MiB).
+        ContainerRequestContext ctx =
+                ctxWith(Long.toString(3L << 20), "versions/123/items/bulk-xlsx");
+        filter.filter(ctx);
+        verify(ctx, never()).abortWith(any());
+    }
+
+    @Test
+    void bulkImportPathStillRejectsBeyondImportLimit() throws IOException {
+        ContainerRequestContext ctx =
+                ctxWith(
+                        Long.toString(RequestSizeLimitFilter.MAX_IMPORT_BODY_BYTES + 1),
+                        "versions/123/items/bulk-xlsx");
+
+        filter.filter(ctx);
+
+        ArgumentCaptor<Response> resp = ArgumentCaptor.forClass(Response.class);
+        verify(ctx).abortWith(resp.capture());
+        assertThat(resp.getValue().getStatus())
+                .isEqualTo(Response.Status.REQUEST_ENTITY_TOO_LARGE.getStatusCode());
     }
 }
