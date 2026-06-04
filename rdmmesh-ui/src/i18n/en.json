@@ -168,6 +168,7 @@
     "viewGrid": "Grid",
     "viewTree": "Tree",
     "viewPivot": "Matrix",
+    "searchPlaceholder": "Search items…",
     "clearAll": {
       "button": "Clear all items",
       "title": "Delete all items of this DRAFT version?",
@@ -175,6 +176,15 @@
       "confirmHint": "Type this phrase to confirm:",
       "okText": "Clear all",
       "success": "{{n}} items deleted"
+    },
+    "bulkDelete": {
+      "button": "Delete selected",
+      "selected": "Selected: {{n}}",
+      "clearSelection": "Clear selection",
+      "confirmTitle": "Delete selected items?",
+      "confirmDescription": "{{n}} item(s) will be deleted. This action is irreversible.",
+      "success": "{{n}} items deleted",
+      "partial": "Deleted {{ok}}, failed {{failed}}"
     },
     "statusValues": {
       "ACTIVE": "ACTIVE",

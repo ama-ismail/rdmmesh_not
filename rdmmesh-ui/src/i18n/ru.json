@@ -168,6 +168,7 @@
     "viewGrid": "Таблица",
     "viewTree": "Дерево",
     "viewPivot": "Матрица",
+    "searchPlaceholder": "Поиск по записям…",
     "clearAll": {
       "button": "Очистить все записи",
       "title": "Удалить все записи DRAFT-версии?",
@@ -175,6 +176,15 @@
       "confirmHint": "Для подтверждения введите фразу:",
       "okText": "Удалить всё",
       "success": "Удалено {{n}} записей"
+    },
+    "bulkDelete": {
+      "button": "Удалить выбранные",
+      "selected": "Выбрано: {{n}}",
+      "clearSelection": "Снять выделение",
+      "confirmTitle": "Удалить выбранные записи?",
+      "confirmDescription": "Будет удалено записей: {{n}}. Действие необратимо.",
+      "success": "Удалено {{n}} записей",
+      "partial": "Удалено {{ok}}, с ошибкой {{failed}}"
     },
     "statusValues": {
       "ACTIVE": "ACTIVE",
