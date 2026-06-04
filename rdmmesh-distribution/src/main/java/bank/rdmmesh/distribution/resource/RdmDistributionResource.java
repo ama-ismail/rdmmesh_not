@@ -155,7 +155,8 @@ public final class RdmDistributionResource {
 
     private static Response xlsxResponse(ExportResult result) {
         StreamingOutput stream =
-                (OutputStream out) -> bank.rdmmesh.distribution.internal.XlsxExporter.write(result.items(), out);
+                (OutputStream out) -> bank.rdmmesh.distribution.internal.XlsxExporter.write(
+                        result.items(), result.attributeOrder(), out);
         String filename = result.domain() + "_" + result.codeset() + "_v" + result.version() + ".xlsx";
         return Response.ok(stream)
                 .type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

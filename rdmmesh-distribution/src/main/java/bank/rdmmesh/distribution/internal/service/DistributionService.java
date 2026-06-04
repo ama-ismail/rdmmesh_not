@@ -5,8 +5,10 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.jdbi.v3.core.Jdbi;
@@ -94,9 +96,39 @@ public final class DistributionService {
             }
             List<ItemDto> items = new ArrayList<>(rows.size());
             for (ItemRow r : rows) items.add(toItem(r, q.lang()));
+            List<String> attributeOrder = resolveAttributeOrder(dao, ref.codesetId());
             return new ExportResult(ref.domainName(), ref.codesetName(),
-                    ver.version(), ver.contentHash(), items);
+                    ver.version(), ver.contentHash(), items, attributeOrder);
         });
+    }
+
+    /**
+     * Порядок атрибутов для экспорта = массив {@code propertyOrder} активной CodeSetSchema,
+     * если задан; иначе — имена полей {@code properties} (fallback); иначе пусто. Нужен,
+     * чтобы выгрузка разворачивала {@code attr.<имя>}-колонки в детерминированном,
+     * заданном пользователем порядке (а не в порядке jsonb-ключей).
+     */
+    private List<String> resolveAttributeOrder(DistributionDao dao, UUID codesetId) {
+        String schemaText = dao.findActiveSchemaJson(codesetId).orElse(null);
+        if (schemaText == null || schemaText.isBlank()) return List.of();
+        try {
+            JsonNode root = json.readTree(schemaText);
+            List<String> names = new ArrayList<>();
+            JsonNode order = root.get("propertyOrder");
+            if (order != null && order.isArray()) {
+                for (JsonNode n : order) {
+                    if (n.isTextual()) names.add(n.asText());
+                }
+                if (!names.isEmpty()) return names;
+            }
+            JsonNode props = root.get("properties");
+            if (props != null && props.isObject()) {
+                props.fieldNames().forEachRemaining(names::add);
+            }
+            return names;
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 
     // ── resolvers ───────────────────────────────────────────────────────────────
@@ -234,7 +266,8 @@ public final class DistributionService {
             String codeset,
             String version,
             String contentHash,
-            List<ItemDto> items) {}
+            List<ItemDto> items,
+            List<String> attributeOrder) {}
 
     /** Доменное «ничего не нашли» — resource превращает в 404. */
     public static final class NotFoundException extends RuntimeException {
