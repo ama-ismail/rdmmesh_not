@@ -255,6 +255,14 @@ export const apiMutations = {
       body: JSON.stringify(body),
     }),
 
+  // E24 — новая ревизия CodeSetSchema (catalog PUT /codesets/{id}/schema). Используется
+  // редактором порядка полей: тело { json_schema } по контракту SchemaRevisionRequest.
+  putSchemaRevision: (codesetId: string, jsonSchema: Record<string, unknown>) =>
+    apiFetch<CodeSetSchemaDto>(`/codesets/${codesetId}/schema`, {
+      method: "PUT",
+      body: JSON.stringify({ json_schema: jsonSchema }),
+    }),
+
   // E11.2a — DRAFT lifecycle + workflow transitions
   createDraft: (codesetId: string, body: CreateDraftRequest = {}) =>
     apiFetch<CodeSetVersion>(`/versions/by-codeset/${codesetId}`, {

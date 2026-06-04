@@ -100,6 +100,14 @@
     "draftBlockedHint": "An open version v{{version}} already exists. Complete its workflow or delete the DRAFT first.",
     "openVersion": "open"
   },
+  "schemaOrder": {
+    "title": "Attribute order",
+    "hint": "Sets the order of attr.* columns in the Excel export",
+    "save": "Save order",
+    "reset": "Reset",
+    "saved": "Attribute order saved",
+    "noFields": "Schema has no attributes (properties)"
+  },
   "version": {
     "title": "Versions",
     "version": "Version",
