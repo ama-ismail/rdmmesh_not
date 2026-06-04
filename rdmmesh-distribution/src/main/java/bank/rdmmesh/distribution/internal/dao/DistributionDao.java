@@ -146,19 +146,6 @@ public interface DistributionDao {
             @Bind("versionId") UUID versionId,
             @Bind("keyPartsJson") String keyPartsJson);
 
-    /**
-     * Текст активной (последней по {@code version}) CodeSetSchema справочника. Нужен
-     * экспорту, чтобы выгружать колонки атрибутов в заданном порядке ({@code propertyOrder}).
-     * Empty — если схема не заведена.
-     */
-    @SqlQuery(
-            "SELECT s.json_schema::text"
-                    + "  FROM catalog.code_set_schema s"
-                    + " WHERE s.codeset_id = :codesetId"
-                    + " ORDER BY s.version DESC"
-                    + " LIMIT 1")
-    Optional<String> findActiveSchemaJson(@Bind("codesetId") UUID codesetId);
-
     record CodeSetRef(
             UUID codesetId, String codesetName,
             UUID domainId,  String domainName,
