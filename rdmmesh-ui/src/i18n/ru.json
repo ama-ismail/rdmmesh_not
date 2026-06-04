@@ -100,14 +100,6 @@
     "draftBlockedHint": "Уже есть открытая версия v{{version}}. Завершите её workflow или удалите DRAFT.",
     "openVersion": "открытая"
   },
-  "schemaOrder": {
-    "title": "Порядок атрибутов",
-    "hint": "Задаёт порядок колонок attr.* при экспорте в Excel",
-    "save": "Сохранить порядок",
-    "reset": "Сбросить",
-    "saved": "Порядок атрибутов сохранён",
-    "noFields": "В схеме нет атрибутов (properties)"
-  },
   "version": {
     "title": "Версии",
     "version": "Версия",

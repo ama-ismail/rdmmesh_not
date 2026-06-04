@@ -28,7 +28,6 @@ import { ApiError } from "@/api/client";
 import { Loader } from "@/components/Loader";
 import { StatusTag } from "@/components/StatusTag";
 import { RequestDeletionButton } from "@/components/RequestDeletionButton";
-import { SchemaFieldOrderEditor } from "@/components/SchemaFieldOrderEditor";
 import type { CodeSetVersion, VersionStatus } from "@/api/types";
 
 // non-terminal статусы блокируют создание новой DRAFT'а — это at-most-one-open инвариант
@@ -50,8 +49,6 @@ export function CodeSetPage() {
 
   const { baseRoles } = useAuth();
   const isAdmin = baseRoles.includes("RDM_ADMIN");
-  // E24 — порядок полей схемы правят Schema Designer и Admin (бэкенд: @RolesAllowed).
-  const canEditSchema = isAdmin || baseRoles.includes("RDM_SCHEMA_DESIGNER");
 
   const codeset = useApi(() => api.getCodeSet(id), qk.codesets.one(id));
   const schema = useApi(() => api.getActiveSchema(id), qk.codesets.schema(id));
@@ -176,26 +173,19 @@ export function CodeSetPage() {
       <Card title="JSON Schema (active)" size="small" style={{ marginBottom: 16 }}>
         <Loader {...schema}>
           {(s) => (
-            <Space direction="vertical" style={{ width: "100%" }} size={16}>
-              <SchemaFieldOrderEditor
-                codesetId={id}
-                jsonSchema={s.json_schema}
-                canEdit={canEditSchema}
-              />
-              <pre
-                style={{
-                  margin: 0,
-                  background: "#fafafa",
-                  padding: 12,
-                  borderRadius: 4,
-                  maxHeight: 320,
-                  overflow: "auto",
-                  fontSize: 12,
-                }}
-              >
-                {JSON.stringify(s.json_schema, null, 2)}
-              </pre>
-            </Space>
+            <pre
+              style={{
+                margin: 0,
+                background: "#fafafa",
+                padding: 12,
+                borderRadius: 4,
+                maxHeight: 320,
+                overflow: "auto",
+                fontSize: 12,
+              }}
+            >
+              {JSON.stringify(s.json_schema, null, 2)}
+            </pre>
           )}
         </Loader>
       </Card>
