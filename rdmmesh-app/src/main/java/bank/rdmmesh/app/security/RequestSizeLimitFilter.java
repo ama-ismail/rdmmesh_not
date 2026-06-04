@@ -38,8 +38,28 @@ public final class RequestSizeLimitFilter implements ContainerRequestFilter {
 
     private static final Logger log = LoggerFactory.getLogger(RequestSizeLimitFilter.class);
 
-    /** 1 MiB. OM ChangeEvent — единицы КБ; leg-room ×100+. */
+    /** 1 MiB. OM ChangeEvent — единицы КБ; leg-room ×100+. Общий лимит по умолчанию. */
     public static final long MAX_BODY_BYTES = 1L << 20;
+
+    /**
+     * 25 MiB — лимит для bulk-import эндпоинтов справочников ({@code /items/bulk*}).
+     * Эти POST'ы аутентифицированы (Author/Admin) и принимают большие xlsx/csv с
+     * десятками тысяч строк, поэтому им нужен потолок выше общего. Неаутентифицированный
+     * вебхук под него не подпадает — остаётся на {@link #MAX_BODY_BYTES}.
+     */
+    public static final long MAX_IMPORT_BODY_BYTES = 25L << 20;
+
+    /**
+     * Лимит тела для пути запроса: bulk-import справочников допускает большие тела,
+     * всё остальное — общий 1 MiB. Используется обоими фильтрами (JAX-RS и servlet),
+     * чтобы порог считался единообразно.
+     */
+    public static long capForPath(String path) {
+        if (path != null && path.contains("/items/bulk")) {
+            return MAX_IMPORT_BODY_BYTES;
+        }
+        return MAX_BODY_BYTES;
+    }
 
     @Override
     public void filter(ContainerRequestContext ctx) throws IOException {
@@ -54,16 +74,17 @@ public final class RequestSizeLimitFilter implements ContainerRequestFilter {
             ctx.abortWith(problem(Response.Status.BAD_REQUEST, "invalid Content-Length"));
             return;
         }
-        if (length > MAX_BODY_BYTES) {
+        long cap = capForPath(ctx.getUriInfo().getPath());
+        if (length > cap) {
             log.warn(
                     "request rejected: Content-Length={} > limit={} ({} {})",
                     length,
-                    MAX_BODY_BYTES,
+                    cap,
                     ctx.getMethod(),
                     ctx.getUriInfo().getPath());
             ctx.abortWith(problem(
                     Response.Status.REQUEST_ENTITY_TOO_LARGE,
-                    "request body exceeds " + MAX_BODY_BYTES + " bytes"));
+                    "request body exceeds " + cap + " bytes"));
         }
     }
 

@@ -43,8 +43,6 @@ public final class RequestBodyCapFilter implements Filter {
 
     private static final Logger log = LoggerFactory.getLogger(RequestBodyCapFilter.class);
 
-    private static final long MAX_BODY_BYTES = RequestSizeLimitFilter.MAX_BODY_BYTES;
-
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
             throws IOException, jakarta.servlet.ServletException {
@@ -54,31 +52,35 @@ public final class RequestBodyCapFilter implements Filter {
             return;
         }
 
+        long cap = RequestSizeLimitFilter.capForPath(http.getRequestURI());
         long declared = http.getContentLengthLong();
-        if (declared > MAX_BODY_BYTES) {
+        if (declared > cap) {
             log.warn("request rejected (servlet-layer): Content-Length={} > limit={} ({} {})",
-                    declared, MAX_BODY_BYTES, http.getMethod(), http.getRequestURI());
+                    declared, cap, http.getMethod(), http.getRequestURI());
             httpResp.setStatus(HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE);
             httpResp.setContentType("application/json");
             httpResp.getWriter().write(
-                    "{\"error\":\"request body exceeds " + MAX_BODY_BYTES + " bytes\"}");
+                    "{\"error\":\"request body exceeds " + cap + " bytes\"}");
             return;
         }
 
-        chain.doFilter(new CappedBodyRequest(http), response);
+        chain.doFilter(new CappedBodyRequest(http, cap), response);
     }
 
     /** Подменяет тело на {@link CappingInputStream}-обёртку. */
     private static final class CappedBodyRequest extends HttpServletRequestWrapper {
 
-        private CappedBodyRequest(HttpServletRequest request) {
+        private final long cap;
+
+        private CappedBodyRequest(HttpServletRequest request, long cap) {
             super(request);
+            this.cap = cap;
         }
 
         @Override
         public ServletInputStream getInputStream() throws IOException {
             ServletInputStream raw = super.getInputStream();
-            CappingInputStream capped = new CappingInputStream(raw, MAX_BODY_BYTES);
+            CappingInputStream capped = new CappingInputStream(raw, cap);
             return new ServletInputStream() {
                 @Override
                 public int read() throws IOException {
