@@ -59,6 +59,16 @@ export interface KeySpec {
   parts: KeyPart[];
 }
 
+// Cross-codeset FK-связь: колонка этого справочника (key part или атрибут) →
+// колонка другого справочника (возможно, в другом домене). Публикуется в
+// OpenMetadata как FOREIGN_KEY, чтобы связанные справочники были видны рядом.
+export interface CodeSetRef {
+  from_column: string;
+  to_codeset_id: string;
+  to_column: string;
+  label?: LocalizedLabel | null;
+}
+
 export interface CodeSet {
   id: string;
   domain_id: string;
@@ -68,6 +78,7 @@ export interface CodeSet {
   labels?: LocalizedLabel | null;
   tags?: string[] | null;
   key_spec: KeySpec;
+  references?: CodeSetRef[] | null;
   hierarchy_mode: HierarchyMode;
   release_channels?: ReleaseChannel[] | null;
   current_published_version?: string | null;

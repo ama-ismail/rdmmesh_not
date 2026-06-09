@@ -29,6 +29,7 @@ import { Loader } from "@/components/Loader";
 import { StatusTag } from "@/components/StatusTag";
 import { RequestDeletionButton } from "@/components/RequestDeletionButton";
 import { SchemaFieldOrderEditor } from "@/components/SchemaFieldOrderEditor";
+import { CodeSetReferencesPanel } from "@/components/CodeSetReferencesPanel";
 import type { CodeSetVersion, VersionStatus } from "@/api/types";
 
 // non-terminal статусы блокируют создание новой DRAFT'а — это at-most-one-open инвариант
@@ -52,6 +53,8 @@ export function CodeSetPage() {
   const isAdmin = baseRoles.includes("RDM_ADMIN");
   // E24 — порядок полей схемы правят Schema Designer и Admin (бэкенд: @RolesAllowed).
   const canEditSchema = isAdmin || baseRoles.includes("RDM_SCHEMA_DESIGNER");
+  // FK-связи между справочниками правят Author / Schema Designer / Admin (бэкенд: @RolesAllowed).
+  const canEditRefs = canEditSchema || baseRoles.includes("RDM_AUTHOR");
 
   const codeset = useApi(() => api.getCodeSet(id), qk.codesets.one(id));
   const schema = useApi(() => api.getActiveSchema(id), qk.codesets.schema(id));
@@ -199,6 +202,14 @@ export function CodeSetPage() {
           )}
         </Loader>
       </Card>
+
+      {codeset.data && (
+        <CodeSetReferencesPanel
+          codeset={codeset.data}
+          jsonSchema={schema.data?.json_schema}
+          canEdit={canEditRefs}
+        />
+      )}
 
       <Card
         title={t("version.title")}

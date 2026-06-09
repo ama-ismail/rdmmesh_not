@@ -11,11 +11,14 @@ from __future__ import annotations
 import pytest  # noqa: F401  (используется pytest-style assertion'ами)
 
 from metadata.ingestion.source.database.rdmmesh.mapping import (
+    build_column_fqn,
     build_description,
+    build_fk_constraint_specs,
     map_jsonschema_type,
     map_key_part_type,
 )
 from metadata.ingestion.source.database.rdmmesh.models import (
+    CodeSetRef,
     KeyPart,
     KeySpec,
     RdmmeshCodeSet,
@@ -133,3 +136,76 @@ def test_build_description_version_only() -> None:
     codeset = RdmmeshCodeSet(id="cs-1", domain_id="d-1", name="x")
     out = build_description(codeset, "1.0.0")
     assert out == "_Published version:_ `1.0.0`"
+
+
+# ---------- build_column_fqn ----------
+
+
+def test_build_column_fqn() -> None:
+    assert (
+        build_column_fqn("svc.default.r_branch.r_ecl_branch_sgmnt", "id")
+        == "svc.default.r_branch.r_ecl_branch_sgmnt.id"
+    )
+
+
+# ---------- build_fk_constraint_specs ----------
+
+
+def _fqn(codeset_id: str) -> str | None:
+    # Фейковый резолвер: id → FQN таблицы (или None для несуществующих).
+    table = {
+        "cs-branch-sgmnt": "svc.default.r_branch.r_ecl_branch_sgmnt",
+        "cs-prdct-sgmnt": "svc.default.r_product.r_lnk_prdct_to_ecl_sgmnt",
+    }.get(codeset_id)
+    return table
+
+
+def test_build_fk_constraint_specs_resolves() -> None:
+    refs = [
+        CodeSetRef(
+            from_column="branch_sgmnt_id",
+            to_codeset_id="cs-branch-sgmnt",
+            to_column="id",
+        ),
+        CodeSetRef(
+            from_column="product_id",
+            to_codeset_id="cs-prdct-sgmnt",
+            to_column="r_ecl_prdct_sgmnt",
+        ),
+    ]
+    specs = build_fk_constraint_specs(refs, _fqn)
+    assert specs == [
+        {
+            "columns": ["branch_sgmnt_id"],
+            "referred_columns": ["svc.default.r_branch.r_ecl_branch_sgmnt.id"],
+        },
+        {
+            "columns": ["product_id"],
+            "referred_columns": [
+                "svc.default.r_product.r_lnk_prdct_to_ecl_sgmnt.r_ecl_prdct_sgmnt"
+            ],
+        },
+    ]
+
+
+def test_build_fk_constraint_specs_skips_unresolved() -> None:
+    # Цель не резолвится (удалён/не найден) → ref тихо пропускается.
+    refs = [
+        CodeSetRef(from_column="x_id", to_codeset_id="missing", to_column="id"),
+        CodeSetRef(
+            from_column="branch_sgmnt_id",
+            to_codeset_id="cs-branch-sgmnt",
+            to_column="id",
+        ),
+    ]
+    specs = build_fk_constraint_specs(refs, _fqn)
+    assert specs == [
+        {
+            "columns": ["branch_sgmnt_id"],
+            "referred_columns": ["svc.default.r_branch.r_ecl_branch_sgmnt.id"],
+        }
+    ]
+
+
+def test_build_fk_constraint_specs_empty() -> None:
+    assert build_fk_constraint_specs([], _fqn) == []

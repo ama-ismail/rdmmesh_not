@@ -58,6 +58,18 @@ class KeySpec(_Base):
     parts: list[KeyPart] = Field(default_factory=list)
 
 
+class CodeSetRef(_Base):
+    """Cross-codeset FK-связь: колонка этого справочника → колонка другого.
+
+    См. rdmmesh-spec/schema/entity/code-set.json#/properties/references.
+    `to_codeset_id` может указывать на справочник в другом домене.
+    """
+
+    from_column: str
+    to_codeset_id: str
+    to_column: str
+
+
 class RdmmeshCodeSet(_Base):
     id: str
     domain_id: str
@@ -69,6 +81,7 @@ class RdmmeshCodeSet(_Base):
     tags: list[str] = Field(default_factory=list)
     hierarchy_mode: str | None = None  # NONE | INTRA_CODESET | CROSS_CODESET
     key_spec: KeySpec | None = None
+    references: list[CodeSetRef] = Field(default_factory=list)
     last_published_version: str | None = None
     deleted_at: datetime | None = None
 
