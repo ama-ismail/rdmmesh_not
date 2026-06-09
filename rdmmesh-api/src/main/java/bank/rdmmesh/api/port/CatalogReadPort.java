@@ -43,6 +43,8 @@ public interface CatalogReadPort {
      * {@code bank.rdmmesh.spec.entity.CodeSet} POJO, у которого свои JSON-поля.
      *
      * @param hierarchyMode {@code "NONE" | "INTRA_CODESET" | "CROSS_CODESET"}
+     * @param keySpecJson сырой JSON key_spec ({@code {"parts":[{"name","type",...}]}}) —
+     *     нужен relational store'у для генерации ключевых колонок физической таблицы.
      */
     record CodeSetSnapshot(
             UUID id,
@@ -51,6 +53,7 @@ public interface CatalogReadPort {
             String hierarchyMode,
             int schemaVersion,
             String currentPublishedVersion,
+            String keySpecJson,
             boolean deleted) {}
 
     /** Активная (или конкретная) ревизия CodeSetSchema. */

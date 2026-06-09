@@ -33,6 +33,7 @@ public final class CatalogReadAdapter implements CatalogReadPort {
                         row.hierarchyMode(),
                         row.schemaVersion() == null ? 1 : row.schemaVersion(),
                         row.currentPublishedVersion(),
+                        row.keySpecJson(),
                         row.deletedAt() != null));
     }
 

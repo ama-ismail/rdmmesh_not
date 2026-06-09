@@ -1,0 +1,113 @@
+package bank.rdmmesh.authoring.internal.relational;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.List;
+
+import org.junit.jupiter.api.Test;
+
+import bank.rdmmesh.authoring.internal.relational.RelationalDdlBuilder.Column;
+
+class RelationalDdlBuilderTest {
+
+    // ── RelationalTypes ──────────────────────────────────────────────────────────
+
+    @Test
+    void key_part_types_map_to_sql() {
+        assertThat(RelationalTypes.keyPartSqlType("STRING")).isEqualTo("text");
+        assertThat(RelationalTypes.keyPartSqlType("integer")).isEqualTo("bigint");
+        assertThat(RelationalTypes.keyPartSqlType("NUMBER")).isEqualTo("double precision");
+        assertThat(RelationalTypes.keyPartSqlType("BOOLEAN")).isEqualTo("boolean");
+        assertThat(RelationalTypes.keyPartSqlType("DATE")).isEqualTo("date");
+        assertThat(RelationalTypes.keyPartSqlType("DATETIME")).isEqualTo("timestamptz");
+        assertThat(RelationalTypes.keyPartSqlType("UUID")).isEqualTo("uuid");
+        assertThat(RelationalTypes.keyPartSqlType(null)).isEqualTo("text");
+        assertThat(RelationalTypes.keyPartSqlType("weird")).isEqualTo("text");
+    }
+
+    @Test
+    void json_schema_types_map_to_sql() {
+        assertThat(RelationalTypes.jsonSchemaSqlType("integer", null, false)).isEqualTo("bigint");
+        assertThat(RelationalTypes.jsonSchemaSqlType("number", null, false)).isEqualTo("double precision");
+        assertThat(RelationalTypes.jsonSchemaSqlType("boolean", null, false)).isEqualTo("boolean");
+        assertThat(RelationalTypes.jsonSchemaSqlType("string", "date", false)).isEqualTo("date");
+        assertThat(RelationalTypes.jsonSchemaSqlType("string", "date-time", false)).isEqualTo("timestamptz");
+        assertThat(RelationalTypes.jsonSchemaSqlType("string", "uuid", false)).isEqualTo("uuid");
+        assertThat(RelationalTypes.jsonSchemaSqlType("string", null, false)).isEqualTo("text");
+        assertThat(RelationalTypes.jsonSchemaSqlType("object", null, false)).isEqualTo("jsonb");
+        // enum всегда text, даже если type=number
+        assertThat(RelationalTypes.jsonSchemaSqlType("number", null, true)).isEqualTo("text");
+    }
+
+    // ── tableName ────────────────────────────────────────────────────────────────
+
+    @Test
+    void table_name_is_domain_double_underscore_codeset() {
+        assertThat(RelationalDdlBuilder.tableName("r_branch", "r_ecl_branch_sgmnt"))
+                .isEqualTo("r_branch__r_ecl_branch_sgmnt");
+    }
+
+    @Test
+    void table_name_rejects_bad_identifiers_and_overlong() {
+        assertThatThrownBy(() -> RelationalDdlBuilder.tableName("R_Branch", "x"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RelationalDdlBuilder.tableName("a".repeat(40), "b".repeat(40)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("too long");
+    }
+
+    // ── createTable ──────────────────────────────────────────────────────────────
+
+    @Test
+    void create_table_has_typed_columns_pk_and_standard_columns() {
+        String ddl = RelationalDdlBuilder.createTable(
+                "rd_data",
+                "r_branch__r_lnk_branch_to_ecl_sgmnt",
+                List.of(new Column("branch_id", "text", true)),
+                List.of(
+                        new Column("branch_sgmnt_id", "bigint", false),
+                        new Column("pd", "double precision", false)));
+
+        assertThat(ddl).contains("CREATE TABLE IF NOT EXISTS \"rd_data\".\"r_branch__r_lnk_branch_to_ecl_sgmnt\"");
+        assertThat(ddl).contains("\"branch_id\" text NOT NULL");
+        assertThat(ddl).contains("\"branch_sgmnt_id\" bigint");
+        assertThat(ddl).contains("\"pd\" double precision");
+        // стандартные колонки
+        assertThat(ddl).contains("\"status\" text NOT NULL DEFAULT 'ACTIVE'");
+        assertThat(ddl).contains("\"effective_from\" date");
+        // PK по ключу
+        assertThat(ddl).contains("PRIMARY KEY (\"branch_id\")");
+    }
+
+    @Test
+    void create_table_composite_pk() {
+        String ddl = RelationalDdlBuilder.createTable(
+                "rd_data",
+                "credit__pd_matrix",
+                List.of(
+                        new Column("segment", "text", true),
+                        new Column("rating", "text", true),
+                        new Column("horizon", "text", true)),
+                List.of());
+        assertThat(ddl).contains("PRIMARY KEY (\"segment\", \"rating\", \"horizon\")");
+    }
+
+    @Test
+    void attribute_colliding_with_standard_column_is_not_duplicated() {
+        // атрибут с именем 'status' перекрывает стандартную колонку — она не дублируется
+        String ddl = RelationalDdlBuilder.createTable(
+                "rd_data",
+                "d__c",
+                List.of(new Column("code", "text", true)),
+                List.of(new Column("status", "bigint", false)));
+        assertThat(ddl.split("\"status\"", -1).length - 1).isEqualTo(1);
+    }
+
+    @Test
+    void create_table_rejects_bad_column_identifier() {
+        assertThatThrownBy(() -> RelationalDdlBuilder.createTable(
+                        "rd_data", "d__c", List.of(new Column("Bad-Name", "text", true)), List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+}
