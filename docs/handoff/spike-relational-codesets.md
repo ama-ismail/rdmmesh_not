@@ -8,22 +8,34 @@
 key-part и на каждый атрибут, строки — настоящие строки «ячейка за ячейкой».
 
 Это ветка `spike/relational-codesets`. Решение по объёму — **полная замена
-storage** (см. вопрос заказчику), но безопасно она делается стадиями. Эта ветка —
-**Stage 1**: рабочий реляционный слой (DDL-генерация + типизированный CRUD + REST),
-поверх которого можно поэтапно вытеснять JSONB из остальных путей.
+storage** (см. вопрос заказчику), безопасно делается стадиями. Модель версионности —
+**вариант C**: на справочник две таблицы (draft + current).
 
-## Что в Stage 1
+## Модель версионности (вариант C)
+
+На справочник — две физические таблицы в `rd_data`, производные от базового имени
+`<domain>__<codeset>` (≤54 символов, чтобы суффиксы укладывались в лимит идентификатора PG 63):
+
+- **`"<base>__draft"`** — рабочая область авторинга. PK `(version_id, <ключи>)`; все
+  черновики сосуществуют строками, различаются по `version_id`.
+- **`"<base>__current"`** — текущий PUBLISHED-снапшот. PK `(<ключи>)` — то, на что
+  можно вешать **настоящие FK** (Stage 6) и что отдаётся потребителям/distribution.
+
+Write-path пишет в `__draft` по `version_id`; на **publish** `__current` атомарно
+пересобирается из draft нужной версии (`DELETE` + `INSERT ... SELECT`).
+
+## Что сделано (Stage 1 + Stage 2)
 
 | Часть | Где |
 |------|-----|
-| Миграция | `bootstrap/sql/migrations/authoring/V024__relational_store.sql` — схема `rd_data` + grants (вкл. `CREATE`) + реестр `authoring.codeset_physical_table` |
-| Порт | `CatalogReadPort.CodeSetSnapshot.keySpecJson` (+ заполнение в `CatalogReadAdapter`) — авторингу нужен `key_spec` для ключевых колонок |
+| Миграция | `V024__relational_store.sql` — `rd_data` + grants(`CREATE`) + реестр `codeset_physical_table` (base name + `published_version_id`) |
+| Порт | `CatalogReadPort.CodeSetSnapshot.keySpecJson` (+ `CatalogReadAdapter`) |
 | Типы | `internal/relational/RelationalTypes` — key-part / JSON Schema → SQL-тип (pure) |
-| DDL | `internal/relational/RelationalDdlBuilder` — `CREATE TABLE`, имя таблицы `<domain>__<codeset>`, валидация идентификаторов (pure) |
-| Сервис | `internal/relational/RelationalStoreService` — `provision` (DDL+реестр), `upsertRow` (cell-by-cell, `CAST(:p AS type)` + ON CONFLICT), `syncFromVersion` (бэкфилл из code_item), `listRows` |
-| DAO | `internal/dao/PhysicalTableRegistryDao` |
-| REST | `resource/RelationalCodeSetResource` — `POST /relational/codesets/{id}/provision`, `POST .../sync?version_id=`, `POST .../rows`, `GET .../rows` |
-| Тест | `RelationalDdlBuilderTest` (типы + DDL, pure) |
+| DDL | `internal/relational/RelationalDdlBuilder` — base/draft/current имена, `createTableWithPk`, `withStandard`, валидация идентификаторов (pure) |
+| Сервис | `internal/relational/RelationalStoreService` — `provision` (draft+current), `upsertDraftRow`/`deleteDraftRow`, `syncFromVersion` (бэкфилл code_item→draft), `publish` (пересборка current), `listCurrentRows`/`listDraftRows` |
+| DAO | `internal/dao/PhysicalTableRegistryDao` (+ `setPublishedVersion`) |
+| REST | `resource/RelationalCodeSetResource` — `provision`, `sync`, `draft-rows` (POST/DELETE/GET), `publish`, `rows` (current) |
+| Тест | `RelationalDdlBuilderTest` (типы + DDL + draft/current, pure) |
 
 ### Маппинг типов
 
@@ -32,56 +44,54 @@ DATE→date, DATETIME→timestamptz, UUID→uuid.
 JSON Schema property: то же + enum→text, object/array→jsonb, string+format(date/
 date-time/uuid)→date/timestamptz/uuid.
 
-### Форма таблицы
+### Форма таблиц
 
 ```sql
-CREATE TABLE rd_data."<domain>__<codeset>" (
-    "<keypart>"  <type> NOT NULL,        -- по одной на key-part
-    ...
-    "<attr>"     <type>,                 -- по одной на атрибут схемы
-    ...
-    "label_ru"   text,
-    "label_en"   text,
-    "status"     text NOT NULL DEFAULT 'ACTIVE',
-    "effective_from" date,
-    "effective_to"   date,
-    PRIMARY KEY ("<keypart>", ...)
+CREATE TABLE rd_data."<base>__draft" (
+    "version_id" uuid NOT NULL,
+    "<keypart>"  <type> NOT NULL, ...           -- по одной на key-part
+    "<attr>"     <type>, ...                     -- по одной на атрибут
+    "label_ru" text, "label_en" text,
+    "status" text NOT NULL DEFAULT 'ACTIVE',
+    "effective_from" date, "effective_to" date,
+    PRIMARY KEY ("version_id", "<keypart>", ...)
+);
+CREATE TABLE rd_data."<base>__current" ( /* те же колонки без version_id */
+    PRIMARY KEY ("<keypart>", ...)               -- цель настоящих FK (Stage 6)
 );
 ```
 
-Безопасность: имена идентификаторов валидируются snake_case-паттерном
-(`^[a-z][a-z0-9_]{0,63}$`), значения биндятся параметрами с `CAST(:p AS <type>)` —
-конкатенации значений в SQL нет.
+Безопасность: имена идентификаторов валидируются snake_case-паттерном, значения
+биндятся параметрами с `CAST(:p AS <type>)` — конкатенации значений в SQL нет.
 
 ## Как потрогать
 
 ```bash
-make up        # поднять стек (Flyway применит V024, создаст rd_data + реестр)
+make up        # Flyway применит V024 (rd_data + реестр)
 T=$(make kc-token)
-CS=<codeset-uuid>
-# 1) материализовать таблицу из key_spec + активной схемы
+CS=<codeset-uuid>;  V=<draft-version-uuid>
+# 1) создать обе таблицы (draft + current) из key_spec + схемы
 curl -X POST -H "Authorization: Bearer $T" localhost:8080/api/v1/relational/codesets/$CS/provision
-# 1b) залить ВСЕ существующие items версии в физ.таблицу (бэкфилл из jsonb)
-curl -X POST -H "Authorization: Bearer $T" "localhost:8080/api/v1/relational/codesets/$CS/sync?version_id=<VERSION-UUID>"
-# 2) записать строку «ячейка за ячейкой»
+# 2a) залить существующие items версии в draft (бэкфилл из jsonb)
+curl -X POST -H "Authorization: Bearer $T" "localhost:8080/api/v1/relational/codesets/$CS/sync?version_id=$V"
+# 2b) или записать строку черновика «ячейка за ячейкой»
 curl -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
   -d '{"branch_id":"001","branch_sgmnt_id":42,"label_ru":"Отделение 001"}' \
-  localhost:8080/api/v1/relational/codesets/$CS/rows
-# 3) прочитать строки
+  "localhost:8080/api/v1/relational/codesets/$CS/draft-rows?version_id=$V"
+# 3) опубликовать → пересборка __current из draft версии
+curl -X POST -H "Authorization: Bearer $T" "localhost:8080/api/v1/relational/codesets/$CS/publish?version_id=$V"
+# 4) прочитать published-снапшот
 curl -H "Authorization: Bearer $T" localhost:8080/api/v1/relational/codesets/$CS/rows
-# 4) убедиться, что это реальная таблица
-make psql   # \dt rd_data.*   и   SELECT * FROM rd_data."<domain>__<codeset>";
+# 5) убедиться, что это реальные таблицы
+make psql   # \dt rd_data.*   и   SELECT * FROM rd_data."<base>__current";
 ```
 
-## Дальше — стадии полной замены (НЕ в этой ветке)
+## Дальше — оставшиеся стадии
 
-- **Stage 2-lite (СДЕЛАНО)** — `syncFromVersion`: бэкфилл существующих items версии из
-  `authoring.code_item` в физическую таблицу. Позволяет наполнить реальную таблицу
-  данными без переписывания write-path. Версионность пока схлопнута (последний sync
-  выигрывает по ключу) — это намеренное упрощение спайка.
-- **Stage 2 — write-path**: `AuthoringService.addItem`/`patch`/bulk пишут в физическую
-  таблицу вместо `authoring.code_item`. Версии: таблица на `(codeset, version)` либо
-  колонка `version_id` + партиционирование. Решить модель версионности.
+- **Stage 2-final — единственный источник**: завязать `AuthoringService.addItem`/`patch`/
+  bulk на `__draft` (вместо/в дополнение к `authoring.code_item`), и `publish` workflow'а
+  на пересборку `__current`. Сейчас relational write-path работает как самостоятельный
+  путь через `/relational/...`, code_item ещё ведущий.
 - **Stage 3 — read-path**: `CodeItemResource` GET/листинг + distribution читают из
   `rd_data` (динамический SELECT → DTO).
 - **Stage 4 — bitemporal/hierarchy**: `effective_*`/`system_*`, closure-таблица и
@@ -95,10 +105,14 @@ make psql   # \dt rd_data.*   и   SELECT * FROM rd_data."<domain>__<codeset>";
 
 ## Риски / открытые вопросы
 
-- **Версионность**: code_item versioned по `version_id`; физической таблице нужна
-  стратегия (таблица-на-версию vs. колонка версии). Самый крупный вопрос Stage 2.
+- **Версионность**: выбран вариант C (draft + current). `__current` хранит только
+  текущий PUBLISHED; полная история версий — в `__draft` по `version_id`. Если нужна
+  bitemporal-история на стороне потребления — расширять отдельно (Stage 4).
 - **Эволюция схемы**: добавление/удаление атрибута → `ALTER TABLE ADD/DROP COLUMN`
-  (миграция данных). Сейчас `provision` только `CREATE TABLE IF NOT EXISTS`.
+  обеих таблиц (миграция данных). Сейчас `provision` только `CREATE TABLE IF NOT EXISTS`.
 - **Динамический DDL под прод-ролью**: `rdmmesh_app` получил `CREATE` на `rd_data` —
   оценить с точки зрения безопасности (отдельная роль/schema-allowlist).
-- **Лимит имени**: `<domain>__<codeset>` ≤ 63 символов; длинные имена → нужен хеш-суффикс.
+- **Лимит имени**: базовое имя `<domain>__<codeset>` ≤ 54 (чтобы `__current`/`__draft`
+  укладывались в 63); длинные имена → нужен хеш-суффикс.
+- **publish без транзакционной координации с workflow**: relational `publish` сейчас
+  отдельный вызов; в Stage 2-final его надо встроить в реальный publish-переход.

@@ -110,4 +110,38 @@ class RelationalDdlBuilderTest {
                         "rd_data", "d__c", List.of(new Column("Bad-Name", "text", true)), List.of()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    // ── модель C: draft/current ─────────────────────────────────────────────────
+
+    @Test
+    void draft_and_current_table_names() {
+        String base = RelationalDdlBuilder.tableName("r_branch", "r_ecl_branch_sgmnt");
+        assertThat(RelationalDdlBuilder.draftTable(base)).isEqualTo("r_branch__r_ecl_branch_sgmnt__draft");
+        assertThat(RelationalDdlBuilder.currentTable(base)).isEqualTo("r_branch__r_ecl_branch_sgmnt__current");
+    }
+
+    @Test
+    void draft_table_has_version_id_first_in_pk() {
+        List<Column> data = RelationalDdlBuilder.withStandard(
+                List.of(new Column("code", "text", true)));
+        List<Column> draftCols = new java.util.ArrayList<>();
+        draftCols.add(RelationalDdlBuilder.VERSION_ID);
+        draftCols.addAll(data);
+        String ddl = RelationalDdlBuilder.createTableWithPk(
+                "rd_data", "d__c__draft", draftCols, List.of("version_id", "code"));
+        assertThat(ddl).contains("\"version_id\" uuid NOT NULL");
+        assertThat(ddl).contains("PRIMARY KEY (\"version_id\", \"code\")");
+    }
+
+    @Test
+    void with_standard_dedupes_and_appends() {
+        List<Column> data = RelationalDdlBuilder.withStandard(
+                List.of(new Column("code", "text", true), new Column("status", "text", false)));
+        // 'status' из ввода не дублируется стандартной колонкой 'status'
+        long statusCount = data.stream().filter(c -> c.name().equals("status")).count();
+        assertThat(statusCount).isEqualTo(1);
+        // присутствуют стандартные label_ru/effective_from
+        assertThat(data.stream().anyMatch(c -> c.name().equals("label_ru"))).isTrue();
+        assertThat(data.stream().anyMatch(c -> c.name().equals("effective_from"))).isTrue();
+    }
 }

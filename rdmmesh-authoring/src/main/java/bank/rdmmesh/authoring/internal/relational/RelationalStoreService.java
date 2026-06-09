@@ -9,6 +9,7 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,13 +19,17 @@ import bank.rdmmesh.authoring.internal.dao.PhysicalTableRegistryDao;
 import bank.rdmmesh.authoring.internal.relational.RelationalDdlBuilder.Column;
 
 /**
- * Relational store (спайк полной замены JSONB): материализует CodeSet в реальную
- * типизированную таблицу схемы {@code rd_data} и пишет/читает строки «ячейка за ячейкой».
+ * Relational store (спайк полной замены JSONB), модель версионности — вариант C:
+ * на справочник две физические таблицы в схеме {@code rd_data}:
+ * <ul>
+ *   <li>{@code "<base>__draft"}   — рабочая область авторинга, PK {@code (version_id, <ключи>)};</li>
+ *   <li>{@code "<base>__current"} — текущий PUBLISHED-снапшот, PK {@code (<ключи>)} — цель FK.</li>
+ * </ul>
  *
- * <p>Колонки выводятся из {@code key_spec} (ключевые, NOT NULL, в PK) и активной
- * CodeSetSchema (атрибуты). Имена идентификаторов валидируются snake_case-паттерном,
- * значения биндятся параметрами с явным {@code CAST(:p AS <type>)} — никакой
- * конкатенации значений в SQL.
+ * <p>Write-path пишет в {@code __draft} по {@code version_id}; на publish {@code __current}
+ * атомарно пересобирается из draft нужной версии. Колонки выводятся из {@code key_spec}
+ * (ключи) и активной CodeSetSchema (атрибуты). Идентификаторы валидируются snake_case,
+ * значения биндятся параметрами с {@code CAST(:p AS <type>)} — конкатенации значений нет.
  */
 public final class RelationalStoreService {
 
@@ -41,46 +46,78 @@ public final class RelationalStoreService {
         this.json = json;
     }
 
-    // ── public API ────────────────────────────────────────────────────────────
+    // ── provision ───────────────────────────────────────────────────────────────
 
-    /** Создаёт (IF NOT EXISTS) физическую таблицу справочника и регистрирует её. */
+    /** Создаёт (IF NOT EXISTS) обе таблицы справочника (draft + current) и регистрирует базу. */
     public ProvisionResult provision(UUID codesetId) {
         ResolvedTable t = resolve(codesetId);
-        String ddl = RelationalDdlBuilder.createTable(
-                SCHEMA, t.table, t.keyColumns, t.attributeColumns);
+
+        String currentDdl = RelationalDdlBuilder.createTableWithPk(
+                SCHEMA, t.currentTable, t.dataColumns, t.keyNames);
+
+        List<Column> draftColumns = new ArrayList<>();
+        draftColumns.add(RelationalDdlBuilder.VERSION_ID);
+        draftColumns.addAll(t.dataColumns);
+        List<String> draftPk = new ArrayList<>();
+        draftPk.add(RelationalDdlBuilder.VERSION_ID.name());
+        draftPk.addAll(t.keyNames);
+        String draftDdl = RelationalDdlBuilder.createTableWithPk(
+                SCHEMA, t.draftTable, draftColumns, draftPk);
+
         jdbi.useHandle(h -> {
-            h.execute(ddl);
+            h.execute(currentDdl);
+            h.execute(draftDdl);
             h.attach(PhysicalTableRegistryDao.class)
-                    .upsert(codesetId, SCHEMA, t.table, t.schemaVersion);
+                    .upsert(codesetId, SCHEMA, t.base, t.schemaVersion);
         });
-        log.info("relational store: материализован codeset_id={} → {}.{} ({} колонок)",
-                codesetId, SCHEMA, t.table, t.columnTypes.size());
-        return new ProvisionResult(SCHEMA, t.table, new ArrayList<>(t.columnTypes.keySet()), ddl);
+        log.info("relational store: материализован codeset_id={} → {}.{}__{{draft,current}}",
+                codesetId, SCHEMA, t.base);
+        return new ProvisionResult(
+                SCHEMA, t.draftTable, t.currentTable, new ArrayList<>(t.columnTypes.keySet()));
     }
 
-    /** Вставляет/обновляет (upsert по ключу) одну строку — по ячейке на переданное значение. */
-    public void upsertRow(UUID codesetId, Map<String, Object> cells) {
-        ResolvedTable t = requireProvisioned(codesetId);
+    // ── write-path (draft) ───────────────────────────────────────────────────────
+
+    /** Upsert одной строки черновика {@code version_id} — по ячейке на переданное значение. */
+    public void upsertDraftRow(UUID versionId, Map<String, Object> cells) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
         validateCells(t, cells);
-        jdbi.useHandle(h -> upsertRow(h, t, cells));
+        jdbi.useHandle(h -> upsertDraft(h, t, versionId, cells));
+    }
+
+    /** Удаляет строку черновика по ключу (в {@code keyCells} должны быть все ключевые колонки). */
+    public void deleteDraftRow(UUID versionId, Map<String, Object> keyCells) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        for (String key : t.keyNames) {
+            if (keyCells == null || keyCells.get(key) == null) {
+                throw new IllegalArgumentException("key column is required: " + key);
+            }
+        }
+        StringBuilder where = new StringBuilder("version_id = CAST(:pv AS uuid)");
+        Map<String, Object> binds = new LinkedHashMap<>();
+        binds.put("pv", versionId);
+        int i = 0;
+        for (String key : t.keyNames) {
+            String p = "k" + i++;
+            where.append(" AND ").append(RelationalDdlBuilder.q(key))
+                    .append(" = CAST(:").append(p).append(" AS ").append(t.columnTypes.get(key)).append(')');
+            binds.put(p, coerce(keyCells.get(key), t.columnTypes.get(key)));
+        }
+        String sql = "DELETE FROM " + qTable(t.draftTable) + " WHERE " + where;
+        jdbi.useHandle(h -> {
+            var u = h.createUpdate(sql);
+            binds.forEach(u::bind);
+            u.execute();
+        });
     }
 
     /**
-     * Бэкфилл (Stage 2-lite): читает все CodeItem'ы версии из текущего хранилища
-     * ({@code authoring.code_item}) и заливает их в физическую таблицу справочника
-     * «ячейка за ячейкой». key_parts мапятся позиционно на ключевые колонки, attributes —
-     * на атрибутивные, плюс label/status/effective_*. Идемпотентно (upsert по ключу),
-     * физическая таблица при необходимости создаётся (provision).
+     * Бэкфилл: читает все CodeItem'ы версии из {@code authoring.code_item} и заливает их
+     * в {@code __draft} «ячейка за ячейкой». Идемпотентно (upsert по {@code (version_id,ключи)}).
      */
     public SyncResult syncFromVersion(UUID versionId) {
-        UUID codesetId = jdbi.withHandle(h -> h.createQuery(
-                        "SELECT codeset_id FROM authoring.code_set_version WHERE id = :v")
-                .bind("v", versionId)
-                .mapTo(UUID.class)
-                .findOne())
-                .orElseThrow(() -> new IllegalArgumentException("unknown version: " + versionId));
-
-        provision(codesetId); // idempotent: гарантируем таблицу + реестр
+        UUID codesetId = codesetIdOf(versionId);
+        provision(codesetId); // idempotent
         ResolvedTable t = resolve(codesetId);
 
         List<ItemRow> items = jdbi.withHandle(h -> h.createQuery(
@@ -110,24 +147,60 @@ public final class RelationalStoreService {
             for (ItemRow item : items) {
                 Map<String, Object> cells = toCells(t, item);
                 validateCells(t, cells);
-                upsertRow(h, t, cells);
+                upsertDraft(h, t, versionId, cells);
                 loaded[0]++;
             }
         });
-        log.info("relational store: sync version_id={} → {}.{}: {} строк",
-                versionId, SCHEMA, t.table, loaded[0]);
-        return new SyncResult(codesetId, t.table, loaded[0]);
+        log.info("relational store: sync version_id={} → {}: {} строк", versionId, t.draftTable, loaded[0]);
+        return new SyncResult(codesetId, t.draftTable, loaded[0]);
     }
 
-    /** Возвращает все строки физической таблицы справочника как список map'ов. */
-    public List<Map<String, Object>> listRows(UUID codesetId) {
+    // ── publish ───────────────────────────────────────────────────────────────
+
+    /** Пересобирает {@code __current} из draft указанной версии (атомарно) и фиксирует версию. */
+    public PublishResult publish(UUID versionId) {
+        UUID codesetId = codesetIdOf(versionId);
         ResolvedTable t = requireProvisioned(codesetId);
-        String sql = "SELECT * FROM " + RelationalDdlBuilder.q(SCHEMA) + '.'
-                + RelationalDdlBuilder.q(t.table);
-        return jdbi.withHandle(h -> h.createQuery(sql).mapToMap().list());
+
+        StringBuilder cols = new StringBuilder();
+        for (Column c : t.dataColumns) {
+            if (cols.length() > 0) cols.append(", ");
+            cols.append(RelationalDdlBuilder.q(c.name()));
+        }
+        String insertSelect = "INSERT INTO " + qTable(t.currentTable) + " (" + cols + ")"
+                + " SELECT " + cols + " FROM " + qTable(t.draftTable)
+                + " WHERE version_id = CAST(:v AS uuid)";
+
+        int inserted = jdbi.inTransaction(h -> {
+            h.createUpdate("DELETE FROM " + qTable(t.currentTable)).execute();
+            int n = h.createUpdate(insertSelect).bind("v", versionId).execute();
+            h.attach(PhysicalTableRegistryDao.class).setPublishedVersion(codesetId, versionId);
+            return n;
+        });
+        log.info("relational store: publish version_id={} → {}: {} строк", versionId, t.currentTable, inserted);
+        return new PublishResult(codesetId, t.currentTable, inserted);
     }
 
-    // ── row write helpers ─────────────────────────────────────────────────────
+    // ── read ─────────────────────────────────────────────────────────────────────
+
+    /** Все строки текущего PUBLISHED-снапшота ({@code __current}). */
+    public List<Map<String, Object>> listCurrentRows(UUID codesetId) {
+        ResolvedTable t = requireProvisioned(codesetId);
+        return jdbi.withHandle(h ->
+                h.createQuery("SELECT * FROM " + qTable(t.currentTable)).mapToMap().list());
+    }
+
+    /** Все строки черновика версии ({@code __draft WHERE version_id}). */
+    public List<Map<String, Object>> listDraftRows(UUID versionId) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        return jdbi.withHandle(h -> h.createQuery(
+                        "SELECT * FROM " + qTable(t.draftTable) + " WHERE version_id = CAST(:v AS uuid)")
+                .bind("v", versionId)
+                .mapToMap()
+                .list());
+    }
+
+    // ── row write helper ─────────────────────────────────────────────────────────
 
     private void validateCells(ResolvedTable t, Map<String, Object> cells) {
         if (cells == null || cells.isEmpty()) {
@@ -145,27 +218,24 @@ public final class RelationalStoreService {
         }
     }
 
-    /** Строит и выполняет INSERT ... ON CONFLICT (key) для одной строки в рамках handle. */
-    private void upsertRow(org.jdbi.v3.core.Handle h, ResolvedTable t, Map<String, Object> cells) {
-        StringBuilder cols = new StringBuilder();
-        StringBuilder vals = new StringBuilder();
+    /** INSERT ... ON CONFLICT (version_id, ключи) для одной строки черновика. */
+    private void upsertDraft(Handle h, ResolvedTable t, UUID versionId, Map<String, Object> cells) {
+        StringBuilder cols = new StringBuilder(RelationalDdlBuilder.q("version_id"));
+        StringBuilder vals = new StringBuilder("CAST(:pv AS uuid)");
         StringBuilder updates = new StringBuilder();
         Map<String, Object> binds = new LinkedHashMap<>();
+        binds.put("pv", versionId);
         int i = 0;
         for (Map.Entry<String, Object> e : cells.entrySet()) {
             Object value = e.getValue();
             if (value == null) {
-                continue; // null → колонка остаётся DEFAULT/NULL
+                continue;
             }
             String name = e.getKey();
             String type = t.columnTypes.get(name);
             String p = "p" + i++;
-            if (cols.length() > 0) {
-                cols.append(", ");
-                vals.append(", ");
-            }
-            cols.append(RelationalDdlBuilder.q(name));
-            vals.append("CAST(:").append(p).append(" AS ").append(type).append(')');
+            cols.append(", ").append(RelationalDdlBuilder.q(name));
+            vals.append(", CAST(:").append(p).append(" AS ").append(type).append(')');
             if (!t.keyNames.contains(name)) {
                 if (updates.length() > 0) updates.append(", ");
                 updates.append(RelationalDdlBuilder.q(name))
@@ -174,74 +244,35 @@ public final class RelationalStoreService {
             binds.put(p, coerce(value, type));
         }
 
-        StringBuilder keyList = new StringBuilder();
+        StringBuilder keyList = new StringBuilder(RelationalDdlBuilder.q("version_id"));
         for (String key : t.keyNames) {
-            if (keyList.length() > 0) keyList.append(", ");
-            keyList.append(RelationalDdlBuilder.q(key));
+            keyList.append(", ").append(RelationalDdlBuilder.q(key));
         }
         String onConflict = updates.length() == 0
                 ? " ON CONFLICT (" + keyList + ") DO NOTHING"
                 : " ON CONFLICT (" + keyList + ") DO UPDATE SET " + updates;
 
-        String sql = "INSERT INTO " + RelationalDdlBuilder.q(SCHEMA) + '.'
-                + RelationalDdlBuilder.q(t.table) + " (" + cols + ") VALUES (" + vals + ')'
+        String sql = "INSERT INTO " + qTable(t.draftTable) + " (" + cols + ") VALUES (" + vals + ')'
                 + onConflict;
-
         var update = h.createUpdate(sql);
-        for (Map.Entry<String, Object> b : binds.entrySet()) {
-            update.bind(b.getKey(), b.getValue());
-        }
+        binds.forEach(update::bind);
         update.execute();
     }
 
-    /** CodeItem-строка (jsonb key_parts/attributes) → map колонка→значение физической таблицы. */
-    private Map<String, Object> toCells(ResolvedTable t, ItemRow item) {
-        Map<String, Object> cells = new LinkedHashMap<>();
-        try {
-            JsonNode keyParts = json.readTree(item.keyPartsJson());
-            if (!keyParts.isArray() || keyParts.size() != t.keyNames.size()) {
-                throw new IllegalStateException(
-                        "key_parts arity " + keyParts.size() + " != key columns " + t.keyNames.size());
-            }
-            for (int i = 0; i < t.keyNames.size(); i++) {
-                cells.put(t.keyNames.get(i), jsonToJava(keyParts.get(i)));
-            }
-            if (item.attributesJson() != null && !item.attributesJson().isBlank()) {
-                JsonNode attrs = json.readTree(item.attributesJson());
-                attrs.fields().forEachRemaining(en -> {
-                    if (t.columnTypes.containsKey(en.getKey()) && !t.keyNames.contains(en.getKey())) {
-                        cells.put(en.getKey(), jsonToJava(en.getValue()));
-                    }
-                });
-            }
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new IllegalStateException("cannot parse code_item json", e);
-        }
-        putIfNotNull(cells, "label_ru", item.labelRu());
-        putIfNotNull(cells, "label_en", item.labelEn());
-        putIfNotNull(cells, "status", item.status());
-        putIfNotNull(cells, "effective_from", item.effectiveFrom());
-        putIfNotNull(cells, "effective_to", item.effectiveTo());
-        return cells;
+    private static String qTable(String table) {
+        return RelationalDdlBuilder.q(SCHEMA) + '.' + RelationalDdlBuilder.q(table);
     }
 
-    private static void putIfNotNull(Map<String, Object> cells, String key, Object value) {
-        if (value != null) {
-            cells.put(key, value);
-        }
-    }
+    // ── resolve ───────────────────────────────────────────────────────────────
 
-    /** JsonNode → Java-скаляр для bind'а; объекты/массивы — как JSON-текст (для jsonb). */
-    private static Object jsonToJava(JsonNode n) {
-        if (n == null || n.isNull()) return null;
-        if (n.isTextual()) return n.asText();
-        if (n.isBoolean()) return n.asBoolean();
-        if (n.isIntegralNumber()) return n.asLong();
-        if (n.isNumber()) return n.asDouble();
-        return n.toString(); // object/array → JSON-текст
+    private UUID codesetIdOf(UUID versionId) {
+        return jdbi.withHandle(h -> h.createQuery(
+                        "SELECT codeset_id FROM authoring.code_set_version WHERE id = :v")
+                .bind("v", versionId)
+                .mapTo(UUID.class)
+                .findOne())
+                .orElseThrow(() -> new IllegalArgumentException("unknown version: " + versionId));
     }
-
-    // ── internals ───────────────────────────────────────────────────────────────
 
     private ResolvedTable requireProvisioned(UUID codesetId) {
         Optional<PhysicalTableRegistryDao.PhysicalTableRow> reg = jdbi.withExtension(
@@ -253,7 +284,7 @@ public final class RelationalStoreService {
         return resolve(codesetId);
     }
 
-    /** Снимок CodeSet'а → имя таблицы и типизированные колонки (key + attributes + standard). */
+    /** Снимок CodeSet'а → имена таблиц и типизированные колонки. */
     private ResolvedTable resolve(UUID codesetId) {
         CatalogReadPort.CodeSetSnapshot cs = catalog.findCodeSet(codesetId)
                 .filter(s -> !s.deleted())
@@ -261,30 +292,34 @@ public final class RelationalStoreService {
         String domainName = catalog.findDomain(cs.domainId())
                 .map(CatalogReadPort.DomainSnapshot::name)
                 .orElseThrow(() -> new IllegalStateException("domain not found: " + cs.domainId()));
-        String table = RelationalDdlBuilder.tableName(domainName, cs.name());
+        String base = RelationalDdlBuilder.tableName(domainName, cs.name());
 
         List<Column> keyColumns = parseKeyColumns(cs.keySpecJson());
         List<Column> attributeColumns = catalog.currentSchema(codesetId)
                 .map(s -> parseAttributeColumns(s.jsonSchemaText()))
                 .orElseGet(List::of);
 
-        // Карта name → sqlType по всем колонкам (key + attr + standard), порядок сохраняем.
+        List<Column> keyAndAttr = new ArrayList<>(keyColumns);
+        keyAndAttr.addAll(attributeColumns);
+        List<Column> dataColumns = RelationalDdlBuilder.withStandard(keyAndAttr);
+
         Map<String, String> types = new LinkedHashMap<>();
+        for (Column c : dataColumns) {
+            types.put(c.name(), c.sqlType());
+        }
         List<String> keyNames = new ArrayList<>();
         for (Column c : keyColumns) {
-            types.put(c.name(), c.sqlType());
             keyNames.add(c.name());
         }
-        for (Column c : attributeColumns) {
-            types.putIfAbsent(c.name(), c.sqlType());
-        }
-        types.putIfAbsent("label_ru", "text");
-        types.putIfAbsent("label_en", "text");
-        types.putIfAbsent("status", "text");
-        types.putIfAbsent("effective_from", "date");
-        types.putIfAbsent("effective_to", "date");
 
-        return new ResolvedTable(table, cs.schemaVersion(), keyColumns, attributeColumns, types, keyNames);
+        return new ResolvedTable(
+                base,
+                RelationalDdlBuilder.draftTable(base),
+                RelationalDdlBuilder.currentTable(base),
+                cs.schemaVersion(),
+                dataColumns,
+                types,
+                keyNames);
     }
 
     private List<Column> parseKeyColumns(String keySpecJson) {
@@ -329,7 +364,6 @@ public final class RelationalStoreService {
         }
     }
 
-    /** "type" может быть строкой или union-массивом (берём первый не-"null"). */
     private static String jsonTypeOf(JsonNode def) {
         JsonNode type = def.path("type");
         if (type.isArray()) {
@@ -343,7 +377,53 @@ public final class RelationalStoreService {
         return type.asText("string");
     }
 
-    /** Приведение JSON-значения к bind-объекту. jsonb-колонки сериализуем в JSON-текст. */
+    /** CodeItem-строка (jsonb key_parts/attributes) → map колонка→значение. */
+    private Map<String, Object> toCells(ResolvedTable t, ItemRow item) {
+        Map<String, Object> cells = new LinkedHashMap<>();
+        try {
+            JsonNode keyParts = json.readTree(item.keyPartsJson());
+            if (!keyParts.isArray() || keyParts.size() != t.keyNames.size()) {
+                throw new IllegalStateException(
+                        "key_parts arity " + keyParts.size() + " != key columns " + t.keyNames.size());
+            }
+            for (int i = 0; i < t.keyNames.size(); i++) {
+                cells.put(t.keyNames.get(i), jsonToJava(keyParts.get(i)));
+            }
+            if (item.attributesJson() != null && !item.attributesJson().isBlank()) {
+                JsonNode attrs = json.readTree(item.attributesJson());
+                attrs.fields().forEachRemaining(en -> {
+                    if (t.columnTypes.containsKey(en.getKey()) && !t.keyNames.contains(en.getKey())) {
+                        cells.put(en.getKey(), jsonToJava(en.getValue()));
+                    }
+                });
+            }
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("cannot parse code_item json", e);
+        }
+        putIfNotNull(cells, "label_ru", item.labelRu());
+        putIfNotNull(cells, "label_en", item.labelEn());
+        putIfNotNull(cells, "status", item.status());
+        putIfNotNull(cells, "effective_from", item.effectiveFrom());
+        putIfNotNull(cells, "effective_to", item.effectiveTo());
+        return cells;
+    }
+
+    private static void putIfNotNull(Map<String, Object> cells, String key, Object value) {
+        if (value != null) {
+            cells.put(key, value);
+        }
+    }
+
+    private static Object jsonToJava(JsonNode n) {
+        if (n == null || n.isNull()) return null;
+        if (n.isTextual()) return n.asText();
+        if (n.isBoolean()) return n.asBoolean();
+        if (n.isIntegralNumber()) return n.asLong();
+        if (n.isNumber()) return n.asDouble();
+        return n.toString();
+    }
+
+    /** jsonb-колонки сериализуем в JSON-текст; остальное — как есть. */
     private Object coerce(Object value, String sqlType) {
         if ("jsonb".equals(sqlType) && !(value instanceof String)) {
             try {
@@ -358,19 +438,21 @@ public final class RelationalStoreService {
     // ── DTO ───────────────────────────────────────────────────────────────────
 
     private record ResolvedTable(
-            String table,
+            String base,
+            String draftTable,
+            String currentTable,
             int schemaVersion,
-            List<Column> keyColumns,
-            List<Column> attributeColumns,
+            List<Column> dataColumns,
             Map<String, String> columnTypes,
             List<String> keyNames) {}
 
     public record ProvisionResult(
-            String schema, String table, List<String> columns, String ddl) {}
+            String schema, String draftTable, String currentTable, List<String> columns) {}
 
-    public record SyncResult(UUID codesetId, String table, int rowsLoaded) {}
+    public record SyncResult(UUID codesetId, String draftTable, int rowsLoaded) {}
 
-    /** Сырая CodeItem-строка из authoring.code_item для бэкфилла. */
+    public record PublishResult(UUID codesetId, String currentTable, int rowsPublished) {}
+
     private record ItemRow(
             String keyPartsJson,
             String attributesJson,

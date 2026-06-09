@@ -20,8 +20,17 @@ public final class RelationalDdlBuilder {
     /** snake_case identifier, ≤64 символов (как в spec key-spec/code-set). */
     public static final Pattern IDENT = Pattern.compile("^[a-z][a-z0-9_]{0,63}$");
 
-    /** Имя физической таблицы: {@code <domain>__<codeset>}, ≤63 символа (лимит реестра). */
+    /** Базовое имя {@code <domain>__<codeset>}, ≤54 — чтобы "<base>__current" укладывалось в 63. */
+    public static final Pattern BASE_TABLE_IDENT = Pattern.compile("^[a-z][a-z0-9_]{0,53}$");
+
+    /** Итоговое имя физической таблицы (draft/current), ≤63 — лимит идентификатора PG. */
     public static final Pattern TABLE_IDENT = Pattern.compile("^[a-z][a-z0-9_]{0,62}$");
+
+    public static final String DRAFT_SUFFIX = "__draft";
+    public static final String CURRENT_SUFFIX = "__current";
+
+    /** Колонка version_id draft-таблицы (часть PK черновика). */
+    public static final Column VERSION_ID = new Column("version_id", "uuid", true);
 
     /** Стандартные колонки, которые есть у каждой материализованной таблицы. */
     private static final List<Column> STANDARD = List.of(
@@ -44,38 +53,30 @@ public final class RelationalDdlBuilder {
         return name != null && IDENT.matcher(name).matches();
     }
 
-    /** {@code <domain>__<codeset>} с проверкой длины/charset. */
+    /** Базовое имя {@code <domain>__<codeset>} с проверкой длины/charset (≤54). */
     public static String tableName(String domainName, String codesetName) {
         require(isValidIdentifier(domainName), "domain name: " + domainName);
         require(isValidIdentifier(codesetName), "codeset name: " + codesetName);
         String name = domainName + "__" + codesetName;
         require(
-                TABLE_IDENT.matcher(name).matches(),
-                "derived table name too long (>63): " + name);
+                BASE_TABLE_IDENT.matcher(name).matches(),
+                "derived base table name too long (>54): " + name);
         return name;
     }
 
-    /**
-     * {@code CREATE TABLE IF NOT EXISTS "schema"."table" (...)} с PK по ключевым колонкам.
-     * Стандартные колонки добавляются, если их имена не заняты ключом/атрибутом.
-     */
-    public static String createTable(
-            String schema,
-            String table,
-            List<Column> keyColumns,
-            List<Column> attributeColumns) {
-        require(isValidIdentifier(schema), "schema: " + schema);
-        require(TABLE_IDENT.matcher(table).matches(), "table: " + table);
-        require(keyColumns != null && !keyColumns.isEmpty(), "at least one key column required");
+    public static String draftTable(String baseName) {
+        return baseName + DRAFT_SUFFIX;
+    }
 
+    public static String currentTable(String baseName) {
+        return baseName + CURRENT_SUFFIX;
+    }
+
+    /** key+attr колонки + стандартные (label/status/effective), дедуп по имени, с сохранением порядка. */
+    public static List<Column> withStandard(List<Column> keyAndAttr) {
         Set<String> seen = new LinkedHashSet<>();
         List<Column> all = new ArrayList<>();
-        for (Column c : keyColumns) {
-            validateColumn(c);
-            require(seen.add(c.name()), "duplicate column: " + c.name());
-            all.add(c);
-        }
-        for (Column c : attributeColumns == null ? List.<Column>of() : attributeColumns) {
+        for (Column c : keyAndAttr == null ? List.<Column>of() : keyAndAttr) {
             validateColumn(c);
             if (seen.add(c.name())) {
                 all.add(c);
@@ -86,11 +87,49 @@ public final class RelationalDdlBuilder {
                 all.add(c);
             }
         }
+        return all;
+    }
+
+    /**
+     * {@code CREATE TABLE IF NOT EXISTS "schema"."table" (...)} с PK по ключевым колонкам.
+     * Стандартные колонки добавляются, если их имена не заняты ключом/атрибутом.
+     * Используется для {@code __current}-таблицы (PK = ключи справочника).
+     */
+    public static String createTable(
+            String schema,
+            String table,
+            List<Column> keyColumns,
+            List<Column> attributeColumns) {
+        require(keyColumns != null && !keyColumns.isEmpty(), "at least one key column required");
+        List<Column> all = withStandard(concat(keyColumns, attributeColumns));
+        List<String> pk = new ArrayList<>();
+        for (Column c : keyColumns) {
+            pk.add(c.name());
+        }
+        return createTableWithPk(schema, table, all, pk);
+    }
+
+    /** Общий генератор: рендерит все колонки в заданном порядке + PRIMARY KEY (pkColumns). */
+    public static String createTableWithPk(
+            String schema, String table, List<Column> columns, List<String> pkColumns) {
+        require(isValidIdentifier(schema), "schema: " + schema);
+        require(TABLE_IDENT.matcher(table).matches(), "table name invalid/too long: " + table);
+        require(columns != null && !columns.isEmpty(), "at least one column required");
+        require(pkColumns != null && !pkColumns.isEmpty(), "at least one PK column required");
+
+        Set<String> names = new LinkedHashSet<>();
+        for (Column c : columns) {
+            validateColumn(c);
+            require(names.add(c.name()), "duplicate column: " + c.name());
+        }
+        for (String pk : pkColumns) {
+            require(names.contains(pk), "PK column not among columns: " + pk);
+        }
 
         StringBuilder sb = new StringBuilder();
         sb.append("CREATE TABLE IF NOT EXISTS ")
                 .append(q(schema)).append('.').append(q(table)).append(" (\n");
-        for (Column c : all) {
+        for (Column c : columns) {
             sb.append("    ").append(q(c.name())).append(' ').append(c.sqlType());
             if (c.notNull()) {
                 sb.append(" NOT NULL");
@@ -101,12 +140,20 @@ public final class RelationalDdlBuilder {
             sb.append(",\n");
         }
         sb.append("    PRIMARY KEY (");
-        for (int i = 0; i < keyColumns.size(); i++) {
+        for (int i = 0; i < pkColumns.size(); i++) {
             if (i > 0) sb.append(", ");
-            sb.append(q(keyColumns.get(i).name()));
+            sb.append(q(pkColumns.get(i)));
         }
         sb.append(")\n)");
         return sb.toString();
+    }
+
+    private static List<Column> concat(List<Column> a, List<Column> b) {
+        List<Column> out = new ArrayList<>(a);
+        if (b != null) {
+            out.addAll(b);
+        }
+        return out;
     }
 
     private static void validateColumn(Column c) {

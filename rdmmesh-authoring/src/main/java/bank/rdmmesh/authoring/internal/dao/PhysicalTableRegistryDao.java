@@ -15,7 +15,7 @@ import org.jdbi.v3.sqlobject.statement.SqlUpdate;
 public interface PhysicalTableRegistryDao {
 
     @SqlQuery(
-            "SELECT codeset_id, schema_name, table_name, schema_version"
+            "SELECT codeset_id, schema_name, table_name, schema_version, published_version_id"
                     + " FROM authoring.codeset_physical_table WHERE codeset_id = :codesetId")
     @RegisterConstructorMapper(PhysicalTableRow.class)
     Optional<PhysicalTableRow> findByCodeset(@Bind("codesetId") UUID codesetId);
@@ -37,6 +37,18 @@ public interface PhysicalTableRegistryDao {
             @Bind("tableName") String tableName,
             @Bind("schemaVersion") int schemaVersion);
 
+    /** Фиксирует, какая версия сейчас материализована в "<base>__current". */
+    @SqlUpdate(
+            "UPDATE authoring.codeset_physical_table"
+                    + " SET published_version_id = :versionId, updated_at = now()"
+                    + " WHERE codeset_id = :codesetId")
+    int setPublishedVersion(
+            @Bind("codesetId") UUID codesetId, @Bind("versionId") UUID versionId);
+
     record PhysicalTableRow(
-            UUID codesetId, String schemaName, String tableName, int schemaVersion) {}
+            UUID codesetId,
+            String schemaName,
+            String tableName,
+            int schemaVersion,
+            UUID publishedVersionId) {}
 }

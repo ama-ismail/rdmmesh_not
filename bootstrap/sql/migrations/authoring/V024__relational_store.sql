@@ -5,21 +5,28 @@
 -- CodeSetSchema), строки — настоящие строки «ячейка за ячейкой». Это альтернатива
 -- generic authoring.code_item с jsonb key_parts/attributes.
 --
--- Stage 1 (этот спайк): схема rd_data + реестр + DDL/CRUD-сервис и REST. Полное
--- вытеснение jsonb из authoring/publishing/distribution — последующие стадии,
--- см. docs/handoff/spike-relational-codesets.md.
+-- Модель версионности — вариант C (см. docs/handoff/spike-relational-codesets.md):
+-- на справочник две таблицы в rd_data, производные от базового имени <domain>__<codeset>:
+--   "<base>__draft"   — рабочая область авторинга, PK (version_id, <ключи>);
+--   "<base>__current" — текущий PUBLISHED-снапшот, PK (<ключи>) — цель настоящих FK.
+-- На publish "<base>__current" атомарно пересобирается из draft нужной версии.
+--
+-- Stage 2 (этот шаг): write-path + publish реляционного стора. Полное вытеснение
+-- jsonb из authoring/publishing/distribution — последующие стадии.
 
 CREATE SCHEMA IF NOT EXISTS rd_data;
 
--- Реестр: какой CodeSet в какую физическую таблицу материализован.
+-- Реестр: какой CodeSet в какое БАЗОВОЕ имя таблицы материализован + что сейчас опубликовано.
+-- Базовое имя ≤54, чтобы "<base>__current" (+9) укладывалось в лимит идентификатора PG (63).
 CREATE TABLE authoring.codeset_physical_table (
-    codeset_id      uuid        PRIMARY KEY,
-    schema_name     text        NOT NULL DEFAULT 'rd_data',
-    table_name      text        NOT NULL
-        CHECK (table_name ~ '^[a-z][a-z0-9_]{0,62}$'),
-    schema_version  integer     NOT NULL,
-    created_at      timestamptz NOT NULL DEFAULT now(),
-    updated_at      timestamptz NOT NULL DEFAULT now(),
+    codeset_id            uuid        PRIMARY KEY,
+    schema_name           text        NOT NULL DEFAULT 'rd_data',
+    table_name            text        NOT NULL
+        CHECK (table_name ~ '^[a-z][a-z0-9_]{0,53}$'),
+    schema_version        integer     NOT NULL,
+    published_version_id  uuid,
+    created_at            timestamptz NOT NULL DEFAULT now(),
+    updated_at            timestamptz NOT NULL DEFAULT now(),
     UNIQUE (schema_name, table_name)
 );
 
