@@ -11,9 +11,13 @@ Pure helpers — маппинг rdmmesh → OM значений, **без зав
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
-from metadata.ingestion.source.database.rdmmesh.models import RdmmeshCodeSet
+from metadata.ingestion.source.database.rdmmesh.models import (
+    CodeSetRef,
+    RdmmeshCodeSet,
+)
 
 
 def map_jsonschema_type(
@@ -84,4 +88,43 @@ def build_description(codeset: RdmmeshCodeSet, version_str: str | None) -> str:
     return "\n\n".join(parts)
 
 
-__all__ = ["map_jsonschema_type", "map_key_part_type", "build_description"]
+def build_column_fqn(table_fqn: str, column: str) -> str:
+    """OM column FQN = <table_fqn>.<column>. Колонки rdmmesh — snake_case без точек."""
+    return f"{table_fqn}.{column}"
+
+
+def build_fk_constraint_specs(
+    references: list[CodeSetRef],
+    resolve_table_fqn: Callable[[str], str | None],
+) -> list[dict[str, list[str]]]:
+    """rdmmesh CodeSet.references → список «спеков» FOREIGN_KEY-констрейнтов.
+
+    Pure: не зависит от OM SDK — возвращает простые dict'ы
+    ``{"columns": [...], "referred_columns": [...]}``. metadata.py превращает их в
+    OM ``TableConstraint``. `resolve_table_fqn(to_codeset_id)` отдаёт FQN таблицы
+    целевого справочника (может быть в другом домене) или ``None``, если справочник
+    не найден/удалён — такой ref тихо пропускается (graceful degradation, как E20).
+    """
+    specs: list[dict[str, list[str]]] = []
+    for ref in references or []:
+        target_table_fqn = resolve_table_fqn(ref.to_codeset_id)
+        if not target_table_fqn:
+            continue
+        specs.append(
+            {
+                "columns": [ref.from_column],
+                "referred_columns": [
+                    build_column_fqn(target_table_fqn, ref.to_column)
+                ],
+            }
+        )
+    return specs
+
+
+__all__ = [
+    "map_jsonschema_type",
+    "map_key_part_type",
+    "build_description",
+    "build_column_fqn",
+    "build_fk_constraint_specs",
+]

@@ -34,7 +34,13 @@ from metadata.generated.schema.api.data.createStoredProcedure import (
 from metadata.generated.schema.api.data.createTable import CreateTableRequest
 from metadata.generated.schema.entity.data.database import Database
 from metadata.generated.schema.entity.data.databaseSchema import DatabaseSchema
-from metadata.generated.schema.entity.data.table import Column, Table, TableType
+from metadata.generated.schema.entity.data.table import (
+    Column,
+    ConstraintType,
+    Table,
+    TableConstraint,
+    TableType,
+)
 from metadata.generated.schema.entity.services.connections.database.customDatabaseConnection import (
     CustomDatabaseConnection,
 )
@@ -70,6 +76,7 @@ from metadata.ingestion.source.database.rdmmesh.client import (
 from metadata.ingestion.source.database.rdmmesh.connection import get_connection
 from metadata.ingestion.source.database.rdmmesh.mapping import (
     build_description,
+    build_fk_constraint_specs,
     map_jsonschema_type,
     map_key_part_type,
 )
@@ -102,6 +109,12 @@ class RdmmeshSource(DatabaseServiceSource):
         # Кэши «текущего цикла ingestion'а» — заполняются по мере спуска по топологии.
         self._domains_by_name: dict[str, RdmmeshDomain] = {}
         self._codesets_by_name: dict[str, RdmmeshCodeSet] = {}
+        # Индексы по id для резолва cross-codeset FK-связей (могут указывать на
+        # справочник в другом домене / другой schema). domains_by_id заполняется
+        # целиком в get_database_schema_names до спуска к таблицам; codeset_by_id —
+        # lazy-кэш (доп. GET /codesets/{id} для целей из ещё не пройденных доменов).
+        self._domains_by_id: dict[str, RdmmeshDomain] = {}
+        self._codeset_by_id: dict[str, RdmmeshCodeSet] = {}
 
         self.connection_obj = self.client
         self.test_connection()
@@ -154,6 +167,10 @@ class RdmmeshSource(DatabaseServiceSource):
             raise
 
         for domain in domains:
+            # Индекс по id нужен и для удалённых — FK может указывать на справочник
+            # в домене, который сам по себе не публикуется как schema, но домен
+            # существует. Цель резолвится по domain_id → name.
+            self._domains_by_id[domain.id] = domain
             if domain.deleted_at is not None:
                 # soft-deleted в rdmmesh → OM сам пометит markAsDeleted при следующем
                 # цикле через mark_deleted_entities (SourceConfig.markDeletedTables).
@@ -220,6 +237,7 @@ class RdmmeshSource(DatabaseServiceSource):
             raise
 
         for codeset in codesets:
+            self._codeset_by_id[codeset.id] = codeset
             if codeset.deleted_at is not None:
                 continue
             self._codesets_by_name[codeset.name] = codeset
@@ -286,11 +304,13 @@ class RdmmeshSource(DatabaseServiceSource):
                 )
 
         description_text = build_description(codeset, version_str)
+        table_constraints = self._build_table_constraints(codeset)
         request = CreateTableRequest(
             name=EntityName(table_name),
             tableType=table_type,
             description=_markdown_or_none(description_text),
             columns=columns,
+            tableConstraints=table_constraints,
             databaseSchema=FullyQualifiedEntityName(
                 fqn.build(
                     metadata=self.metadata,
@@ -303,6 +323,69 @@ class RdmmeshSource(DatabaseServiceSource):
         )
         yield Either(right=request)
         self.register_record(table_request=request)
+
+    # ---------- cross-codeset FK constraints (references) ----------
+
+    def _build_table_constraints(
+        self, codeset: RdmmeshCodeSet
+    ) -> list[TableConstraint] | None:
+        """CodeSet.references → OM FOREIGN_KEY tableConstraints.
+
+        Связи отдаются в каталог, чтобы пользователь видел связанные справочники
+        рядом и мог по ним навигировать. Цель может быть в другом домене; ref на
+        несуществующий/удалённый справочник тихо пропускается (graceful degradation).
+        """
+        if not codeset.references:
+            return None
+        specs = build_fk_constraint_specs(
+            codeset.references, self._resolve_fk_table_fqn
+        )
+        constraints = [
+            TableConstraint(
+                constraintType=ConstraintType.FOREIGN_KEY,
+                columns=spec["columns"],
+                referredColumns=[
+                    FullyQualifiedEntityName(c) for c in spec["referred_columns"]
+                ],
+            )
+            for spec in specs
+        ]
+        return constraints or None
+
+    def _resolve_fk_table_fqn(self, to_codeset_id: str) -> str | None:
+        """to_codeset_id → FQN OM-таблицы целевого справочника (или None)."""
+        codeset = self._codeset_by_id.get(to_codeset_id)
+        if codeset is None:
+            try:
+                codeset = self.client.get_codeset(to_codeset_id)
+            except RdmmeshApiError as exc:
+                logger.warning(
+                    "rdmmesh: get_codeset(%s) для FK упал: %s — ref пропущен",
+                    to_codeset_id,
+                    exc,
+                )
+                return None
+            if codeset is not None:
+                self._codeset_by_id[to_codeset_id] = codeset
+        if codeset is None or codeset.deleted_at is not None:
+            return None
+        domain = self._domains_by_id.get(codeset.domain_id)
+        if domain is None:
+            logger.warning(
+                "rdmmesh: domain %s цели FK не в кеше — ref на %s пропущен",
+                codeset.domain_id,
+                codeset.name,
+            )
+            return None
+        return fqn.build(
+            self.metadata,
+            entity_type=Table,
+            service_name=self.context.get().database_service,
+            database_name=self.context.get().database,
+            schema_name=domain.name,
+            table_name=codeset.name,
+            skip_es_search=True,
+        )
 
     # ---------- stubs (rdmmesh не имеет stored procedures / тегов на E12-MVP) ----------
 

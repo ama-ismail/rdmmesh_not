@@ -8,6 +8,7 @@ import type {
   BulkImportResult,
   CodeItem,
   CodeSet,
+  CodeSetRef,
   CodeSetSchemaDto,
   CodeSetVersion,
   DirectoryRole,
@@ -261,6 +262,14 @@ export const apiMutations = {
     apiFetch<CodeSetSchemaDto>(`/codesets/${codesetId}/schema`, {
       method: "PUT",
       body: JSON.stringify({ json_schema: jsonSchema }),
+    }),
+
+  // Cross-codeset FK-связи (catalog PUT /codesets/{id}/references). Полная замена
+  // набора: пустой массив очищает связи. Связи публикуются в OpenMetadata как FOREIGN_KEY.
+  setCodeSetReferences: (codesetId: string, references: CodeSetRef[]) =>
+    apiFetch<CodeSet>(`/codesets/${codesetId}/references`, {
+      method: "PUT",
+      body: JSON.stringify({ references }),
     }),
 
   // E11.2a — DRAFT lifecycle + workflow transitions

@@ -17,6 +17,7 @@ import bank.rdmmesh.catalog.internal.dao.DomainDao.DomainRow;
 import bank.rdmmesh.catalog.resource.CodeSetSchemaDto;
 import bank.rdmmesh.spec.entity.CodeSet;
 import bank.rdmmesh.spec.entity.CodeSet.HierarchyMode;
+import bank.rdmmesh.spec.entity.CodeSetRef;
 import bank.rdmmesh.spec.entity.CodeSetVersion.ReleaseChannel;
 import bank.rdmmesh.spec.entity.Domain;
 import bank.rdmmesh.spec.entity.KeySpec;
@@ -74,6 +75,7 @@ public final class CatalogMappers {
         cs.setLabels(toLabels(row.labelRu(), row.labelEn()));
         cs.setTags(toList(row.tags()));
         cs.setKeySpec(parseKeySpec(row.keySpecJson()));
+        cs.setReferences(parseReferences(row.columnRefsJson()));
         cs.setHierarchyMode(HierarchyMode.fromValue(row.hierarchyMode()));
         cs.setReleaseChannels(parseChannels(row.releaseChannels()));
         cs.setSchemaVersion(row.schemaVersion());
@@ -121,6 +123,17 @@ public final class CatalogMappers {
             return JSON.readValue(json, KeySpec.class);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Cannot parse stored key_spec JSON: " + json, e);
+        }
+    }
+
+    /** Парсит JSONB-массив column_refs в список {@link CodeSetRef}. NULL/"[]"/"" → пустой список. */
+    private static List<CodeSetRef> parseReferences(String json) {
+        if (json == null || json.isBlank()) return new ArrayList<>();
+        try {
+            List<CodeSetRef> refs = JSON.readValue(json, new TypeReference<List<CodeSetRef>>() {});
+            return refs == null ? new ArrayList<>() : refs;
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Cannot parse stored column_refs JSON: " + json, e);
         }
     }
 
