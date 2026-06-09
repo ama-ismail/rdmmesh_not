@@ -12,6 +12,7 @@ import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -19,6 +20,7 @@ import jakarta.ws.rs.core.Response;
 import bank.rdmmesh.api.security.RdmmeshPrincipal;
 import bank.rdmmesh.authoring.internal.relational.RelationalStoreService;
 import bank.rdmmesh.authoring.internal.relational.RelationalStoreService.ProvisionResult;
+import bank.rdmmesh.authoring.internal.relational.RelationalStoreService.SyncResult;
 
 import io.dropwizard.auth.Auth;
 
@@ -71,6 +73,31 @@ public final class RelationalCodeSetResource {
             throw new WebApplicationException(e.getMessage(), Response.Status.BAD_REQUEST);
         } catch (IllegalStateException e) {
             throw new WebApplicationException(e.getMessage(), Response.Status.CONFLICT);
+        }
+    }
+
+    @POST
+    @Path("/sync")
+    @RolesAllowed({"RDM_AUTHOR", "RDM_SCHEMA_DESIGNER", "RDM_ADMIN"})
+    public SyncResult sync(
+            @Auth RdmmeshPrincipal principal,
+            @PathParam("id") String id,
+            @QueryParam("version_id") String versionId) {
+        UUID codesetId = parseUuid(id);
+        if (versionId == null || versionId.isBlank()) {
+            throw new WebApplicationException("version_id query param is required",
+                    Response.Status.BAD_REQUEST);
+        }
+        try {
+            SyncResult result = store.syncFromVersion(parseUuid(versionId));
+            if (!result.codesetId().equals(codesetId)) {
+                throw new WebApplicationException(
+                        "version " + versionId + " does not belong to codeset " + id,
+                        Response.Status.BAD_REQUEST);
+            }
+            return result;
+        } catch (IllegalArgumentException e) {
+            throw new WebApplicationException(e.getMessage(), Response.Status.BAD_REQUEST);
         }
     }
 
