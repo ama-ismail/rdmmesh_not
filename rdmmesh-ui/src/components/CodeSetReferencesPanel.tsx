@@ -77,10 +77,17 @@ export function CodeSetReferencesPanel({
     () => (toDomainId ? api.listCodeSetsByDomain(toDomainId) : Promise.resolve([])),
     qk.codesets.byDomain(toDomainId ?? "none"),
   );
+  // Схема целевого справочника — чтобы предлагать не только key-part'ы, но и атрибуты
+  // (FK может указывать на атрибут, напр. r_coef_pd.product_id → ...r_ecl_prdct_sgmnt).
+  // listCodeSetsByDomain отдаёт key_spec, но не схему атрибутов — тянем её отдельно.
+  const targetSchema = useApi(
+    () => (toCodesetId ? api.getActiveSchema(toCodesetId) : Promise.resolve(null)),
+    qk.codesets.schema(toCodesetId ?? "none"),
+  );
   const targetColumns = useMemo(() => {
     const target = targetCodesets.data?.find((c) => c.id === toCodesetId);
-    return columnsOf(target);
-  }, [targetCodesets.data, toCodesetId]);
+    return columnsOf(target, targetSchema.data?.json_schema);
+  }, [targetCodesets.data, toCodesetId, targetSchema.data]);
 
   const save = useMutation({
     mutationFn: (next: CodeSetRef[]) => apiMutations.setCodeSetReferences(codeset.id, next),
@@ -231,7 +238,8 @@ export function CodeSetReferencesPanel({
             <Select
               showSearch
               disabled={!toCodesetId}
-              placeholder="обычно key-part цели"
+              loading={targetSchema.loading}
+              placeholder="key-part или атрибут цели"
               options={targetColumns.map((c) => ({ value: c, label: c }))}
             />
           </Form.Item>
