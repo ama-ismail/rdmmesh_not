@@ -55,6 +55,21 @@ final class MigrationsIT extends PostgresIT {
     }
 
     @Test
+    void codeSetHasColumnRefsJsonb() throws SQLException {
+        // V016 — cross-codeset FK-связи (E25). Колонка column_refs jsonb с дефолтом '[]'.
+        try (Connection c = adminConnection();
+                Statement st = c.createStatement();
+                ResultSet rs = st.executeQuery(
+                        "SELECT data_type, column_default FROM information_schema.columns"
+                                + " WHERE table_schema = 'catalog' AND table_name = 'code_set'"
+                                + " AND column_name = 'column_refs'")) {
+            assertThat(rs.next()).as("catalog.code_set.column_refs exists").isTrue();
+            assertThat(rs.getString("data_type")).isEqualTo("jsonb");
+            assertThat(rs.getString("column_default")).contains("[]");
+        }
+    }
+
+    @Test
     void auditLogIsRangePartitioned() throws SQLException {
         try (Connection c = adminConnection();
                 Statement st = c.createStatement();
