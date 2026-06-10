@@ -1,8 +1,12 @@
 package bank.rdmmesh.authoring.internal.relational;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
@@ -10,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import bank.rdmmesh.api.eventbus.VersionPublishedDomainEvent;
+import bank.rdmmesh.authoring.resource.CodeItemDto;
 import bank.rdmmesh.spec.events.VersionPublishedEvent;
 
 /**
@@ -55,5 +60,61 @@ class RelationalStoreServiceTest {
         VersionPublishedDomainEvent event =
                 new VersionPublishedDomainEvent(UUID.randomUUID(), OffsetDateTime.now(), payload);
         assertThatCode(() -> store.onVersionPublished(event)).doesNotThrowAnyException();
+    }
+
+    // ── read-path projection (Stage 3) ────────────────────────────────────────────
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    @Test
+    void projectRow_reconstructs_canonical_dto() {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("branch_id", "001");
+        row.put("branch_sgmnt_id", 42L);          // атрибут (bigint)
+        row.put("pd", 0.5);                        // атрибут (double)
+        row.put("label_ru", "Отделение 001");
+        row.put("label_en", "Branch 001");
+        row.put("description_ru", "опорное");
+        row.put("order_index", 7);
+        row.put("parent_key", "[\"000\"]");        // jsonb-текст
+        row.put("status", "ACTIVE");
+        row.put("effective_from", "2026-01-01");
+
+        UUID version = UUID.randomUUID();
+        CodeItemDto dto = RelationalStoreService.projectRow(
+                List.of("branch_id"), List.of("branch_sgmnt_id", "pd"), row, version, JSON);
+
+        assertThat(dto.keyParts()).containsExactly("001");
+        assertThat(dto.attributes())
+                .containsEntry("branch_sgmnt_id", 42L)
+                .containsEntry("pd", 0.5);
+        assertThat(dto.labelRu()).isEqualTo("Отделение 001");
+        assertThat(dto.descriptionRu()).isEqualTo("опорное");
+        assertThat(dto.parentKey()).containsExactly("000");
+        assertThat(dto.orderIndex()).isEqualTo(7);
+        assertThat(dto.status()).isEqualTo("ACTIVE");
+        assertThat(dto.effectiveFrom()).isEqualTo("2026-01-01");
+        assertThat(dto.versionId()).isEqualTo(version.toString());
+        // нет в relational-модели:
+        assertThat(dto.id()).isNull();
+        assertThat(dto.parentRef()).isNull();
+        assertThat(dto.rowVersion()).isNull();
+    }
+
+    @Test
+    void projectRow_handles_missing_and_null_fields() {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("code", "X");
+        row.put("parent_key", null);   // корневой item — parent_key SQL NULL
+
+        CodeItemDto dto = RelationalStoreService.projectRow(
+                List.of("code"), List.of(), row, null, JSON);
+
+        assertThat(dto.keyParts()).containsExactly("X");
+        assertThat(dto.parentKey()).isNull();
+        assertThat(dto.orderIndex()).isNull();
+        assertThat(dto.versionId()).isNull();          // current-снапшот без version_id
+        assertThat(dto.attributes()).isEmpty();
+        assertThat(dto.status()).isNull();
     }
 }

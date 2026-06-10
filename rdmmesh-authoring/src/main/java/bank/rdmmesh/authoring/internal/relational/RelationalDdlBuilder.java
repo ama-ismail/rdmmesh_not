@@ -61,6 +61,15 @@ public final class RelationalDdlBuilder {
         return name != null && IDENT.matcher(name).matches();
     }
 
+    /** Имена стандартных колонок (label/description/parent_key/order_index/status/effective_*). */
+    public static Set<String> standardColumnNames() {
+        Set<String> names = new LinkedHashSet<>();
+        for (Column c : STANDARD) {
+            names.add(c.name());
+        }
+        return names;
+    }
+
     /** Базовое имя {@code <domain>__<codeset>} с проверкой длины/charset (≤54). */
     public static String tableName(String domainName, String codesetName) {
         require(isValidIdentifier(domainName), "domain name: " + domainName);

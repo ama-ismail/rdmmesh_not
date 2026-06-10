@@ -5,8 +5,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jdbi.v3.core.Handle;
@@ -19,6 +21,7 @@ import bank.rdmmesh.api.eventbus.VersionPublishedDomainEvent;
 import bank.rdmmesh.api.port.CatalogReadPort;
 import bank.rdmmesh.authoring.internal.dao.PhysicalTableRegistryDao;
 import bank.rdmmesh.authoring.internal.relational.RelationalDdlBuilder.Column;
+import bank.rdmmesh.authoring.resource.CodeItemDto;
 
 /**
  * Relational store (спайк полной замены JSONB), модель версионности — вариант C:
@@ -296,6 +299,133 @@ public final class RelationalStoreService {
                 .bind("v", versionId)
                 .mapToMap()
                 .list());
+    }
+
+    // ── read-path → CodeItemDto (Stage 3) ─────────────────────────────────────────
+
+    /**
+     * PUBLISHED-снапшот ({@code __current}), спроецированный в канонический {@link CodeItemDto}
+     * (динамический SELECT → DTO). Демонстрирует, что relational store воспроизводит API-контракт
+     * `code_item` целиком (key_parts/attributes/parent_key/label/description/order/status/effective).
+     */
+    public List<CodeItemDto> listCurrentItems(UUID codesetId) {
+        ResolvedTable t = requireProvisioned(codesetId);
+        List<Map<String, Object>> rows = jdbi.withHandle(h -> h.createQuery(
+                        "SELECT * FROM " + qTable(t.currentTable) + orderByClause(t))
+                .mapToMap()
+                .list());
+        return projectRows(t, null, rows);
+    }
+
+    /** Черновик версии ({@code __draft WHERE version_id}), спроецированный в {@link CodeItemDto}. */
+    public List<CodeItemDto> listDraftItems(UUID versionId) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        List<Map<String, Object>> rows = jdbi.withHandle(h -> h.createQuery(
+                        "SELECT * FROM " + qTable(t.draftTable)
+                                + " WHERE version_id = CAST(:v AS uuid)" + orderByClause(t))
+                .bind("v", versionId)
+                .mapToMap()
+                .list());
+        return projectRows(t, versionId, rows);
+    }
+
+    /** Детерминированный порядок: order_index (NULLS LAST), затем ключи. */
+    private String orderByClause(ResolvedTable t) {
+        StringBuilder sb = new StringBuilder(" ORDER BY ")
+                .append(RelationalDdlBuilder.q("order_index")).append(" ASC NULLS LAST");
+        for (String key : t.keyNames) {
+            sb.append(", ").append(RelationalDdlBuilder.q(key));
+        }
+        return sb.toString();
+    }
+
+    private List<CodeItemDto> projectRows(ResolvedTable t, UUID versionId, List<Map<String, Object>> rows) {
+        Set<String> standard = RelationalDdlBuilder.standardColumnNames();
+        List<String> attrNames = new ArrayList<>();
+        for (Column c : t.dataColumns) {
+            if (!t.keyNames.contains(c.name()) && !standard.contains(c.name())) {
+                attrNames.add(c.name());
+            }
+        }
+        List<CodeItemDto> out = new ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            out.add(projectRow(t.keyNames, attrNames, row, versionId, json));
+        }
+        return out;
+    }
+
+    /**
+     * Чистая проекция строки physical-таблицы (column to value) в {@link CodeItemDto}.
+     * Static, тестируется без БД на hand-built map (как отдаёт jdbi {@code mapToMap}).
+     * Поля, которых нет в relational-модели (id, system_*, row_version, parent_ref) = null.
+     * jsonb-атрибуты приходят как JSON-текст (ограничение спайк-проекции).
+     */
+    static CodeItemDto projectRow(
+            List<String> keyNames,
+            List<String> attrNames,
+            Map<String, Object> row,
+            UUID versionId,
+            ObjectMapper json) {
+        List<String> keyParts = new ArrayList<>(keyNames.size());
+        for (String k : keyNames) {
+            keyParts.add(asString(row.get(k)));
+        }
+        Map<String, Object> attributes = new LinkedHashMap<>();
+        for (String a : attrNames) {
+            Object v = row.get(a);
+            if (v != null) {
+                attributes.put(a, v);
+            }
+        }
+        return new CodeItemDto(
+                null,
+                versionId == null ? null : versionId.toString(),
+                keyParts,
+                asString(row.get("label_ru")),
+                asString(row.get("label_en")),
+                asString(row.get("description_ru")),
+                asString(row.get("description_en")),
+                parseStringList(row.get("parent_key"), json),
+                null,
+                attributes,
+                asInteger(row.get("order_index")),
+                asString(row.get("status")),
+                asString(row.get("effective_from")),
+                asString(row.get("effective_to")),
+                null,
+                null,
+                null);
+    }
+
+    private static String asString(Object v) {
+        return v == null ? null : v.toString();
+    }
+
+    private static Integer asInteger(Object v) {
+        if (v == null) return null;
+        if (v instanceof Number n) {
+            return n.intValue();
+        }
+        try {
+            return Integer.valueOf(v.toString().trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static List<String> parseStringList(Object v, ObjectMapper json) {
+        if (v == null) {
+            return null;
+        }
+        String text = v.toString();
+        if (text.isBlank() || "null".equals(text)) {
+            return null;
+        }
+        try {
+            return json.readValue(text, new TypeReference<List<String>>() {});
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // ── row write helper ─────────────────────────────────────────────────────────

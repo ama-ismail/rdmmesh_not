@@ -36,7 +36,9 @@ import io.dropwizard.auth.Auth;
  *   <li>{@code DELETE /relational/codesets/{id}/draft-rows?version_id=} — удалить строку черновика по ключу</li>
  *   <li>{@code GET    /relational/codesets/{id}/draft-rows?version_id=} — строки черновика</li>
  *   <li>{@code POST   /relational/codesets/{id}/publish?version_id=}    — пересобрать current из draft</li>
- *   <li>{@code GET    /relational/codesets/{id}/rows}                   — текущий PUBLISHED-снапшот</li>
+ *   <li>{@code GET    /relational/codesets/{id}/rows}                   — текущий PUBLISHED-снапшот (raw rows)</li>
+ *   <li>{@code GET    /relational/codesets/{id}/items}                 — PUBLISHED-снапшот → CodeItemDto (Stage 3)</li>
+ *   <li>{@code GET    /relational/codesets/{id}/draft-items?version_id=} — черновик → CodeItemDto (Stage 3)</li>
  * </ul>
  *
  * <p>Префикс {@code /relational} (а не {@code /codesets}) — чтобы не пересекаться с
@@ -160,6 +162,31 @@ public final class RelationalCodeSetResource {
             @Auth RdmmeshPrincipal principal, @PathParam("id") String id) {
         try {
             return store.listCurrentRows(parseUuid(id));
+        } catch (IllegalStateException e) {
+            throw conflict(e);
+        }
+    }
+
+    @GET
+    @Path("/items")
+    public List<CodeItemDto> listCurrentItems(
+            @Auth RdmmeshPrincipal principal, @PathParam("id") String id) {
+        try {
+            return store.listCurrentItems(parseUuid(id));
+        } catch (IllegalStateException e) {
+            throw conflict(e);
+        }
+    }
+
+    @GET
+    @Path("/draft-items")
+    public List<CodeItemDto> listDraftItems(
+            @Auth RdmmeshPrincipal principal,
+            @PathParam("id") String id,
+            @QueryParam("version_id") String versionId) {
+        parseUuid(id);
+        try {
+            return store.listDraftItems(requireVersion(versionId));
         } catch (IllegalStateException e) {
             throw conflict(e);
         }

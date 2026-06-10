@@ -101,6 +101,28 @@ CREATE TABLE rd_data."<base>__current" ( /* те же колонки без vers
 cycle-detection, `parent_ref`, per-row `content_hash`. `__current` по-прежнему = один
 последний PUBLISHED-снапшот (без произвольных semver/`knowledge_as_of`).
 
+## Что сделано (Stage 3 — read-path → CodeItemDto)
+
+Проекция строк `rd_data` обратно в канонический `CodeItemDto` (динамический SELECT → DTO) —
+доказательство, что relational store воспроизводит API-контракт `code_item` целиком.
+
+- `RelationalStoreService.projectRow` — **pure static** (column→value map → `CodeItemDto`):
+  key-колонки → `key_parts`; не-ключевые/не-стандартные → `attributes`; `parent_key`
+  парсится из jsonb-текста; `id`/`system_*`/`row_version`/`parent_ref` = null (нет в модели).
+  Тестируется без БД (`RelationalStoreServiceTest.projectRow_*`).
+- `RelationalDdlBuilder.standardColumnNames()` — единый источник имён стандартных колонок
+  (классификация attribute vs standard в проекции).
+- `listCurrentItems(codesetId)` / `listDraftItems(versionId)` — SELECT * + `ORDER BY
+  order_index NULLS LAST, <ключи>` → `projectRow`.
+- REST (read-only, additive — рядом с `code_item`, не заменяя): `GET …/items`
+  (PUBLISHED-снапшот), `GET …/draft-items?version_id=` (черновик).
+
+**Почему additive, а не hard-switch `CodeItemResource`/distribution:** relational store
+пока best-effort зеркало (source-of-truth — `code_item`); жёсткое переключение
+production-чтения = риск отдать неполные данные при пропуске зеркала. Эндпоинты `/items`
+доказывают round-trip rd_data → канонический DTO; переключение основного чтения — Stage 7.
+Ограничение проекции: jsonb-атрибуты (object/array) приходят как JSON-текст.
+
 ## Как потрогать
 
 ```bash
@@ -129,10 +151,12 @@ make psql   # \dt rd_data.*   и   SELECT * FROM rd_data."<base>__current";
   на `__draft` из normal flow + publish-хук на пересборку `__current`. Остаётся как
   best-effort зеркало поверх ведущего `code_item`; «жёсткое» переключение source-of-truth —
   Stage 7.
-- **Stage 3 — read-path**: `CodeItemResource` GET/листинг + distribution читают из
-  `rd_data` (динамический SELECT → DTO).
-- **Stage 4 — bitemporal/hierarchy**: `effective_*`/`system_*`, closure-таблица и
-  cycle-detection на реляционной модели (или отдельные служебные таблицы).
+- ~~**Stage 3 — read-path**~~ ✅ **СДЕЛАНО** (additive, см. раздел выше): проекция
+  `rd_data` → `CodeItemDto`, эндпоинты `/items` и `/draft-items`. Hard-switch
+  `CodeItemResource`/distribution на rd_data — Stage 7.
+- **Stage 4-full — bitemporal/hierarchy**: `system_*` (Stage 4-lite дал `effective_*`/
+  `parent_key`/`order_index`/`description_*`), closure-таблица и cycle-detection на
+  реляционной модели, `parent_ref`, per-row `content_hash`.
 - **Stage 5 — publish/diff/hash**: детерминированная сериализация строк физической
   таблицы для `content_hash`/подписи; `DiffCalculator` на колонках.
 - **Stage 6 — FK**: `column_refs` (E25) → реальные `ALTER TABLE ... ADD FOREIGN KEY`
