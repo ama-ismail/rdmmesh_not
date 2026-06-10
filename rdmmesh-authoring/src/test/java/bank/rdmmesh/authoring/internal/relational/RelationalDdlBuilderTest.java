@@ -214,4 +214,37 @@ class RelationalDdlBuilderTest {
                         "rd_data", "d__c", List.of(), false))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    // ── Stage 6: настоящие FK ─────────────────────────────────────────────────────
+
+    @Test
+    void foreign_key_name_readable_when_short() {
+        assertThat(RelationalDdlBuilder.foreignKeyName(
+                "d__c__current", "branch_sgmnt_id", "d__t__current", "id"))
+                .isEqualTo("fk_d__c__current__branch_sgmnt_id__id");
+    }
+
+    @Test
+    void foreign_key_name_hashes_when_too_long() {
+        String name = RelationalDdlBuilder.foreignKeyName(
+                "a".repeat(60), "branch_sgmnt_id", "t__current", "id");
+        assertThat(name).matches("fk_[0-9a-f]+").hasSizeLessThanOrEqualTo(63);
+    }
+
+    @Test
+    void add_foreign_key_is_idempotent_drop_then_add() {
+        String sql = RelationalDdlBuilder.addForeignKey(
+                "rd_data", "d__c__current", "branch_sgmnt_id", "d__t__current", "id", "fk_x");
+        assertThat(sql).contains("ALTER TABLE \"rd_data\".\"d__c__current\"");
+        assertThat(sql).contains("DROP CONSTRAINT IF EXISTS \"fk_x\"");
+        assertThat(sql).contains("ADD CONSTRAINT \"fk_x\" FOREIGN KEY (\"branch_sgmnt_id\")");
+        assertThat(sql).contains("REFERENCES \"rd_data\".\"d__t__current\" (\"id\")");
+    }
+
+    @Test
+    void add_foreign_key_rejects_bad_identifiers() {
+        assertThatThrownBy(() -> RelationalDdlBuilder.addForeignKey(
+                        "rd_data", "d__c__current", "Bad-Name", "d__t__current", "id", "fk_x"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

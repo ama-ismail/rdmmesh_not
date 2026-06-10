@@ -1,5 +1,6 @@
 package bank.rdmmesh.api.port;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -39,6 +40,14 @@ public interface CatalogReadPort {
     Optional<DomainSnapshot> findDomain(UUID domainId);
 
     /**
+     * Cross-codeset FK-связи справочника (E25, {@code catalog.code_set.column_refs}) —
+     * нужны relational store'у (Stage 6), чтобы материализовать настоящие
+     * {@code FOREIGN KEY} между {@code rd_data}-таблицами. Пустой список, если связей нет
+     * или CodeSet удалён.
+     */
+    List<CodeSetReferenceSnapshot> referencesOf(UUID codesetId);
+
+    /**
      * Snapshot CodeSet'а в form'е, нужной соседним модулям. Не путать с богатым
      * {@code bank.rdmmesh.spec.entity.CodeSet} POJO, у которого свои JSON-поля.
      *
@@ -68,4 +77,10 @@ public interface CatalogReadPort {
             UUID id,
             String name,
             String displayName) {}
+
+    /** Одна cross-codeset FK-связь (E25): колонка ЭТОГО справочника → колонка целевого. */
+    record CodeSetReferenceSnapshot(
+            String fromColumn,
+            UUID toCodesetId,
+            String toColumn) {}
 }

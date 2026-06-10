@@ -261,6 +261,42 @@ public final class RelationalDdlBuilder {
             """.formatted(selfKey, from, filter);
     }
 
+    // ── настоящие FK между __current-таблицами (Stage 6, E25 column_refs) ─────────
+
+    /** Имя FK-констрейнта; при превышении лимита 63 — детерминированный хеш-суффикс. */
+    public static String foreignKeyName(
+            String fromTable, String fromColumn, String toTable, String toColumn) {
+        String raw = "fk_" + fromTable + "__" + fromColumn + "__" + toColumn;
+        if (raw.length() <= 63 && IDENT.matcher(raw).matches()) {
+            return raw;
+        }
+        long h = Integer.toUnsignedLong((fromTable + '|' + fromColumn + '|' + toTable + '|' + toColumn).hashCode());
+        return "fk_" + Long.toHexString(h);
+    }
+
+    /**
+     * Идемпотентный {@code ALTER TABLE … DROP CONSTRAINT IF EXISTS …, ADD CONSTRAINT … FOREIGN
+     * KEY (from) REFERENCES …(to)} (drop+add в одном statement — повторный вызов не падает).
+     * Целевая колонка должна иметь unique/PK-констрейнт (это проверяет {@code RelationalStoreService}).
+     */
+    public static String addForeignKey(
+            String schema, String fromTable, String fromColumn,
+            String toTable, String toColumn, String constraintName) {
+        require(isValidIdentifier(schema), "schema: " + schema);
+        require(TABLE_IDENT.matcher(fromTable).matches(), "from table: " + fromTable);
+        require(TABLE_IDENT.matcher(toTable).matches(), "to table: " + toTable);
+        require(isValidIdentifier(fromColumn), "from column: " + fromColumn);
+        require(isValidIdentifier(toColumn), "to column: " + toColumn);
+        require(constraintName != null && IDENT.matcher(constraintName).matches(),
+                "constraint name: " + constraintName);
+        String from = q(schema) + '.' + q(fromTable);
+        return "ALTER TABLE " + from
+                + " DROP CONSTRAINT IF EXISTS " + q(constraintName) + ","
+                + " ADD CONSTRAINT " + q(constraintName)
+                + " FOREIGN KEY (" + q(fromColumn) + ')'
+                + " REFERENCES " + q(schema) + '.' + q(toTable) + " (" + q(toColumn) + ')';
+    }
+
     /** {@code jsonb_build_array("k1", "k2", ...)} из (провалидированных) ключевых колонок. */
     private static String jsonbBuildArray(List<String> keyNames) {
         require(keyNames != null && !keyNames.isEmpty(), "at least one key column required");

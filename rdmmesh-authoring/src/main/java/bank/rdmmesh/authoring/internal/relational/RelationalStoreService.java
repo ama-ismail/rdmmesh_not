@@ -537,6 +537,64 @@ public final class RelationalStoreService {
                 asString(row.get("effective_to")));
     }
 
+    // ── настоящие FK между __current (Stage 6, E25 column_refs) ───────────────────
+
+    /**
+     * Материализует настоящие {@code FOREIGN KEY} между {@code __current}-таблицами из
+     * cross-codeset связей E25 ({@code column_refs}). Каждая связь применяется, только если:
+     * (1) {@code from_column} — колонка этого справочника; (2) целевой справочник provisioned;
+     * (3) {@code to_column} — единственная ключевая (PK) колонка целевого {@code __current}
+     * (Postgres FK требует unique-констрейнт на цели; составной PK одной колонкой не покрыть).
+     * Остальные связи тихо пропускаются с причиной (E25 — graceful degradation).
+     */
+    public ForeignKeyReport applyForeignKeys(UUID codesetId) {
+        ResolvedTable from = requireProvisioned(codesetId);
+        List<AppliedFk> applied = new ArrayList<>();
+        List<SkippedFk> skipped = new ArrayList<>();
+        for (CatalogReadPort.CodeSetReferenceSnapshot ref : catalog.referencesOf(codesetId)) {
+            if (!from.columnTypes.containsKey(ref.fromColumn())) {
+                skipped.add(new SkippedFk(ref.fromColumn(), ref.toCodesetId(),
+                        "from_column не является колонкой справочника"));
+                continue;
+            }
+            boolean targetProvisioned = jdbi.withExtension(PhysicalTableRegistryDao.class,
+                    d -> d.findByCodeset(ref.toCodesetId())).isPresent();
+            if (!targetProvisioned) {
+                skipped.add(new SkippedFk(ref.fromColumn(), ref.toCodesetId(),
+                        "целевой справочник не материализован (provision)"));
+                continue;
+            }
+            ResolvedTable to;
+            try {
+                to = resolve(ref.toCodesetId());
+            } catch (RuntimeException e) {
+                skipped.add(new SkippedFk(ref.fromColumn(), ref.toCodesetId(),
+                        "целевой справочник не резолвится: " + e.getMessage()));
+                continue;
+            }
+            if (to.keyNames.size() != 1 || !to.keyNames.get(0).equals(ref.toColumn())) {
+                skipped.add(new SkippedFk(ref.fromColumn(), ref.toCodesetId(),
+                        "to_column не единственная PK-колонка целевого __current (нужен unique)"));
+                continue;
+            }
+            String name = RelationalDdlBuilder.foreignKeyName(
+                    from.currentTable, ref.fromColumn(), to.currentTable, ref.toColumn());
+            String ddl = RelationalDdlBuilder.addForeignKey(
+                    SCHEMA, from.currentTable, ref.fromColumn(), to.currentTable, ref.toColumn(), name);
+            try {
+                jdbi.useHandle(h -> h.execute(ddl));
+                applied.add(new AppliedFk(
+                        ref.fromColumn(), ref.toCodesetId(), to.currentTable, ref.toColumn(), name));
+            } catch (RuntimeException e) {
+                skipped.add(new SkippedFk(ref.fromColumn(), ref.toCodesetId(),
+                        "DDL не применился (тип/данные?): " + e.getMessage()));
+            }
+        }
+        log.info("relational store: FK для codeset_id={}: applied={} skipped={}",
+                codesetId, applied.size(), skipped.size());
+        return new ForeignKeyReport(applied, skipped);
+    }
+
     // ── колоночный diff (Stage 5) ─────────────────────────────────────────────────
 
     /**
@@ -1021,6 +1079,16 @@ public final class RelationalStoreService {
 
     /** Сводка колоночного diff'а двух версий. */
     public record RelDiffSummary(int added, int changed, int removed, List<RelDiffEntry> entries) {}
+
+    /** Применённый FK: from_column → toTable(to_column), имя констрейнта. */
+    public record AppliedFk(
+            String fromColumn, UUID toCodesetId, String toTable, String toColumn, String constraint) {}
+
+    /** Пропущенная связь и причина (E25 graceful degradation). */
+    public record SkippedFk(String fromColumn, UUID toCodesetId, String reason) {}
+
+    /** Результат материализации FK справочника. */
+    public record ForeignKeyReport(List<AppliedFk> applied, List<SkippedFk> skipped) {}
 
     private record ItemRow(
             String keyPartsJson,

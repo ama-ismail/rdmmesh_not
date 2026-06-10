@@ -176,6 +176,31 @@ Parity-замечание: байтовое совпадение хэшей га
 полей; per-item маппинг (стрингование ключей, реконструкция attributes из колонок) выровнен
 и покрыт parity-тестом, исполнение на реальной БД валидирует CI.
 
+## Что сделано (Stage 6 — настоящие FK между __current)
+
+E25 `column_refs` (cross-codeset связи) → реальные enforced `FOREIGN KEY` между
+`rd_data."<base>__current"`-таблицами.
+
+- Порт: `CatalogReadPort.referencesOf(codesetId)` → `List<CodeSetReferenceSnapshot>`
+  (`fromColumn`, `toCodesetId`, `toColumn`); реализация в `CatalogReadAdapter` парсит
+  `catalog.code_set.column_refs` (битый JSON не роняет — E25 descriptive).
+- DDL (pure): `RelationalDdlBuilder.addForeignKey` — идемпотентный `ALTER TABLE … DROP
+  CONSTRAINT IF EXISTS …, ADD CONSTRAINT … FOREIGN KEY(from) REFERENCES …(to)` (drop+add
+  в одном statement); `foreignKeyName` — имя с хеш-суффиксом при превышении 63.
+- `RelationalStoreService.applyForeignKeys(codesetId)` — по каждой связи **defensive**:
+  применяет FK только если `from_column` есть в таблице, целевой справочник provisioned
+  и `to_column` — единственная PK-колонка целевого `__current` (Postgres FK требует
+  unique на цели; составной PK одной колонкой не покрыть). Остальное — `SkippedFk` с
+  причиной (graceful, как E25). Возвращает `ForeignKeyReport(applied, skipped)`.
+- REST: `POST …/foreign-keys` (Author/Schema Designer/Admin).
+- Pure-тесты: `foreignKeyName`/`addForeignKey` (структура + валидация идентификаторов).
+
+**Self-FK на `parent_key` НЕ сделан (осознанно).** `parent_key` хранится как `jsonb`-массив,
+а настоящий self-FK требует, чтобы родительские поля были теми же типизированными колонками,
+что и ключ (т.е. отдельные `parent_<keypart>`-колонки). Это структурное изменение модели;
+для иерархии уже есть on-demand closure/cycle-detection (Stage 4b). Materialized parent-columns
++ self-FK — отдельный шаг, если потребуется БД-enforced ссылочная целостность иерархии.
+
 ## Как потрогать
 
 ```bash
@@ -212,10 +237,11 @@ make psql   # \dt rd_data.*   и   SELECT * FROM rd_data."<base>__current";
   closure-таблицы и per-row `content_hash` вынесены в Stage 5 / при необходимости.
 - ~~**Stage 5 — publish/diff/hash**~~ ✅ **СДЕЛАНО** (см. раздел выше): общий канонизатор
   `CanonicalSnapshot` + `content_hash` из `rd_data` (parity с `code_item`) + колоночный `diff`.
-- **Stage 6 — FK**: `column_refs` (E25) → реальные `ALTER TABLE ... ADD FOREIGN KEY`
-  между `rd_data`-таблицами (после материализации цели).
+- ~~**Stage 6 — FK**~~ ✅ **СДЕЛАНО** (см. раздел выше): `column_refs` (E25) → реальные
+  `FOREIGN KEY` между `__current` (defensive, только при unique-цели). Self-FK на
+  `parent_key` отложен (нужны materialized parent-колонки).
 - **Stage 7**: удалить JSONB-колонки/индексы из `code_item`/`code_set_schema` и снести
-  generic-путь.
+  generic-путь; переключить production read/write на `rd_data` (hard-switch).
 
 ## Риски / открытые вопросы
 

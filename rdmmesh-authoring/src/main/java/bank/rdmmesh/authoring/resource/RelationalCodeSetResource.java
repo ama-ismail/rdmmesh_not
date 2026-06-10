@@ -45,6 +45,7 @@ import io.dropwizard.auth.Auth;
  *   <li>{@code GET    /relational/codesets/{id}/cycles[?version_id=]}    — ключи в циклах parent_key (Stage 4)</li>
  *   <li>{@code GET    /relational/codesets/{id}/content-hash[?version_id=]} — content_hash из rd_data (Stage 5)</li>
  *   <li>{@code GET    /relational/codesets/{id}/diff?from_version_id=&to_version_id=} — колоночный diff (Stage 5)</li>
+ *   <li>{@code POST   /relational/codesets/{id}/foreign-keys}        — материализовать FK из E25 (Stage 6)</li>
  * </ul>
  *
  * <p>Префикс {@code /relational} (а не {@code /codesets}) — чтобы не пересекаться с
@@ -225,6 +226,20 @@ public final class RelationalCodeSetResource {
             return versionId == null || versionId.isBlank()
                     ? store.currentCycles(parseUuid(id))
                     : store.draftCycles(parseUuid(versionId));
+        } catch (IllegalStateException e) {
+            throw conflict(e);
+        }
+    }
+
+    @POST
+    @Path("/foreign-keys")
+    @RolesAllowed({"RDM_AUTHOR", "RDM_SCHEMA_DESIGNER", "RDM_ADMIN"})
+    public RelationalStoreService.ForeignKeyReport applyForeignKeys(
+            @Auth RdmmeshPrincipal principal, @PathParam("id") String id) {
+        try {
+            return store.applyForeignKeys(parseUuid(id));
+        } catch (IllegalArgumentException e) {
+            throw badRequest(e);
         } catch (IllegalStateException e) {
             throw conflict(e);
         }
