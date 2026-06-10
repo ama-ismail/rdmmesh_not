@@ -28,6 +28,8 @@ public final class RelationalDdlBuilder {
 
     public static final String DRAFT_SUFFIX = "__draft";
     public static final String CURRENT_SUFFIX = "__current";
+    /** История всех PUBLISHED-версий (≤9 символов, чтобы укладываться в 63 при base≤54). */
+    public static final String HISTORY_SUFFIX = "__history";
 
     /** Колонка version_id draft-таблицы (часть PK черновика). */
     public static final Column VERSION_ID = new Column("version_id", "uuid", true);
@@ -91,6 +93,11 @@ public final class RelationalDdlBuilder {
 
     public static String currentTable(String baseName) {
         return baseName + CURRENT_SUFFIX;
+    }
+
+    /** Таблица истории всех PUBLISHED-версий ({@code <base>__history}), PK как у draft. */
+    public static String historyTable(String baseName) {
+        return baseName + HISTORY_SUFFIX;
     }
 
     /** key+attr колонки + стандартные (label/status/effective), дедуп по имени, с сохранением порядка. */

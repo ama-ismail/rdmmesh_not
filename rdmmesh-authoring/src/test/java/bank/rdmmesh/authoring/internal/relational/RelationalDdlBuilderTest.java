@@ -121,6 +121,15 @@ class RelationalDdlBuilderTest {
     }
 
     @Test
+    void history_table_name_and_fits_identifier_limit() {
+        String base = RelationalDdlBuilder.tableName("r_branch", "r_ecl_branch_sgmnt");
+        assertThat(RelationalDdlBuilder.historyTable(base))
+                .isEqualTo("r_branch__r_ecl_branch_sgmnt__history");
+        // base ≤54 + "__history"(9) укладывается в лимит 63 идентификатора PG.
+        assertThat(RelationalDdlBuilder.historyTable("a".repeat(54))).hasSize(63);
+    }
+
+    @Test
     void draft_table_has_version_id_first_in_pk() {
         List<Column> data = RelationalDdlBuilder.withStandard(
                 List.of(new Column("code", "text", true)));

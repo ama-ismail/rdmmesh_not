@@ -103,29 +103,35 @@ public final class RelationalStoreService {
         String currentDdl = RelationalDdlBuilder.createTableWithPk(
                 SCHEMA, t.currentTable, t.dataColumns, t.keyNames);
 
-        List<Column> draftColumns = new ArrayList<>();
-        draftColumns.add(RelationalDdlBuilder.VERSION_ID);
-        draftColumns.addAll(t.dataColumns);
-        List<String> draftPk = new ArrayList<>();
-        draftPk.add(RelationalDdlBuilder.VERSION_ID.name());
-        draftPk.addAll(t.keyNames);
+        // draft и history имеют одинаковую форму: version_id + data, PK (version_id, ключи).
+        List<Column> versionedColumns = new ArrayList<>();
+        versionedColumns.add(RelationalDdlBuilder.VERSION_ID);
+        versionedColumns.addAll(t.dataColumns);
+        List<String> versionedPk = new ArrayList<>();
+        versionedPk.add(RelationalDdlBuilder.VERSION_ID.name());
+        versionedPk.addAll(t.keyNames);
         String draftDdl = RelationalDdlBuilder.createTableWithPk(
-                SCHEMA, t.draftTable, draftColumns, draftPk);
+                SCHEMA, t.draftTable, versionedColumns, versionedPk);
+        String historyDdl = RelationalDdlBuilder.createTableWithPk(
+                SCHEMA, t.historyTable, versionedColumns, versionedPk);
 
         jdbi.useHandle(h -> {
             h.execute(currentDdl);
             h.execute(draftDdl);
+            h.execute(historyDdl);
             // Stage 4-lite: идемпотентно доращиваем новые колонки на уже существующих
             // таблицах (description/parent_key/order_index, эволюция атрибутов).
             h.execute(RelationalDdlBuilder.addColumnsIfNotExists(SCHEMA, t.currentTable, t.dataColumns));
             h.execute(RelationalDdlBuilder.addColumnsIfNotExists(SCHEMA, t.draftTable, t.dataColumns));
+            h.execute(RelationalDdlBuilder.addColumnsIfNotExists(SCHEMA, t.historyTable, t.dataColumns));
             h.attach(PhysicalTableRegistryDao.class)
                     .upsert(codesetId, SCHEMA, t.base, t.schemaVersion);
         });
         log.info("relational store: материализован codeset_id={} → {}.{}__{{draft,current}}",
                 codesetId, SCHEMA, t.base);
         return new ProvisionResult(
-                SCHEMA, t.draftTable, t.currentTable, new ArrayList<>(t.columnTypes.keySet()));
+                SCHEMA, t.draftTable, t.currentTable, t.historyTable,
+                new ArrayList<>(t.columnTypes.keySet()));
     }
 
     // ── write-path (draft) ───────────────────────────────────────────────────────
@@ -282,10 +288,19 @@ public final class RelationalStoreService {
         String insertSelect = "INSERT INTO " + qTable(t.currentTable) + " (" + cols + ")"
                 + " SELECT " + cols + " FROM " + qTable(t.draftTable)
                 + " WHERE version_id = CAST(:v AS uuid)";
+        // История: снимок этой версии в __history (version_id + data), без перезатирания других версий.
+        String vidCol = RelationalDdlBuilder.q("version_id");
+        String historyInsert = "INSERT INTO " + qTable(t.historyTable) + " (" + vidCol + ", " + cols + ")"
+                + " SELECT " + vidCol + ", " + cols + " FROM " + qTable(t.draftTable)
+                + " WHERE version_id = CAST(:v AS uuid)";
 
         int inserted = jdbi.inTransaction(h -> {
             h.createUpdate("DELETE FROM " + qTable(t.currentTable)).execute();
             int n = h.createUpdate(insertSelect).bind("v", versionId).execute();
+            // Идемпотентно по версии: перезаписываем снимок именно этой версии в истории.
+            h.createUpdate("DELETE FROM " + qTable(t.historyTable) + " WHERE version_id = CAST(:v AS uuid)")
+                    .bind("v", versionId).execute();
+            h.createUpdate(historyInsert).bind("v", versionId).execute();
             h.attach(PhysicalTableRegistryDao.class).setPublishedVersion(codesetId, versionId);
             return n;
         });
@@ -333,6 +348,22 @@ public final class RelationalStoreService {
         ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
         List<Map<String, Object>> rows = jdbi.withHandle(h -> h.createQuery(
                         "SELECT * FROM " + qTable(t.draftTable)
+                                + " WHERE version_id = CAST(:v AS uuid)" + orderByClause(t))
+                .bind("v", versionId)
+                .mapToMap()
+                .list());
+        return projectRows(t, versionId, rows);
+    }
+
+    /**
+     * Снимок конкретной PUBLISHED-версии ({@code __history WHERE version_id}) → {@link CodeItemDto}.
+     * В отличие от {@code __current} (только последняя), история хранит все опубликованные версии —
+     * это то, что нужно distribution'у для произвольного semver / {@code knowledge_as_of} (Stage 7a).
+     */
+    public List<CodeItemDto> listPublishedItems(UUID versionId) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        List<Map<String, Object>> rows = jdbi.withHandle(h -> h.createQuery(
+                        "SELECT * FROM " + qTable(t.historyTable)
                                 + " WHERE version_id = CAST(:v AS uuid)" + orderByClause(t))
                 .bind("v", versionId)
                 .mapToMap()
@@ -872,6 +903,7 @@ public final class RelationalStoreService {
                 base,
                 RelationalDdlBuilder.draftTable(base),
                 RelationalDdlBuilder.currentTable(base),
+                RelationalDdlBuilder.historyTable(base),
                 cs.schemaVersion(),
                 dataColumns,
                 types,
@@ -1059,13 +1091,15 @@ public final class RelationalStoreService {
             String base,
             String draftTable,
             String currentTable,
+            String historyTable,
             int schemaVersion,
             List<Column> dataColumns,
             Map<String, String> columnTypes,
             List<String> keyNames) {}
 
     public record ProvisionResult(
-            String schema, String draftTable, String currentTable, List<String> columns) {}
+            String schema, String draftTable, String currentTable, String historyTable,
+            List<String> columns) {}
 
     public record SyncResult(UUID codesetId, String draftTable, int rowsLoaded) {}
 

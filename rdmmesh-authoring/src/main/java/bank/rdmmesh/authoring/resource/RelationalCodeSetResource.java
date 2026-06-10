@@ -41,6 +41,7 @@ import io.dropwizard.auth.Auth;
  *   <li>{@code GET    /relational/codesets/{id}/rows}                   — текущий PUBLISHED-снапшот (raw rows)</li>
  *   <li>{@code GET    /relational/codesets/{id}/items}                 — PUBLISHED-снапшот → CodeItemDto (Stage 3)</li>
  *   <li>{@code GET    /relational/codesets/{id}/draft-items?version_id=} — черновик → CodeItemDto (Stage 3)</li>
+ *   <li>{@code GET    /relational/codesets/{id}/published-items?version_id=} — снимок PUBLISHED-версии (Stage 7a)</li>
  *   <li>{@code GET    /relational/codesets/{id}/closure[?version_id=]}   — closure иерархии (Stage 4)</li>
  *   <li>{@code GET    /relational/codesets/{id}/cycles[?version_id=]}    — ключи в циклах parent_key (Stage 4)</li>
  *   <li>{@code GET    /relational/codesets/{id}/content-hash[?version_id=]} — content_hash из rd_data (Stage 5)</li>
@@ -194,6 +195,20 @@ public final class RelationalCodeSetResource {
         parseUuid(id);
         try {
             return store.listDraftItems(requireVersion(versionId));
+        } catch (IllegalStateException e) {
+            throw conflict(e);
+        }
+    }
+
+    @GET
+    @Path("/published-items")
+    public List<CodeItemDto> listPublishedItems(
+            @Auth RdmmeshPrincipal principal,
+            @PathParam("id") String id,
+            @QueryParam("version_id") String versionId) {
+        parseUuid(id);
+        try {
+            return store.listPublishedItems(requireVersion(versionId));
         } catch (IllegalStateException e) {
             throw conflict(e);
         }

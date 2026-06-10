@@ -243,6 +243,40 @@ make psql   # \dt rd_data.*   и   SELECT * FROM rd_data."<base>__current";
 - **Stage 7**: удалить JSONB-колонки/индексы из `code_item`/`code_set_schema` и снести
   generic-путь; переключить production read/write на `rd_data` (hard-switch).
 
+## Stage 7 — hard-switch (полный снос jsonb), в работе
+
+Цель: `rd_data` — единственный стор; убрать jsonb-колонки `code_item`/`code_set_schema`
+и generic-путь. **Блокер**, найденный на старте: модель C хранила только *последний*
+PUBLISHED-снапшот (`__current` перезатирается на publish'е), а distribution отдаёт
+произвольный semver / `knowledge_as_of` (история всех версий). Поэтому простой drop
+`code_item` сломал бы distribution. Решение (выбрано заказчиком) — сперва дать
+реляционную историю версий.
+
+### Stage 7a — история версий (`__history`) ✅ СДЕЛАНО
+
+- Третья физическая таблица на справочник: `rd_data."<base>__history"` — форма как у
+  `__draft` (`version_id` + data, PK `(version_id, ключи)`), но хранит снимок **каждой**
+  опубликованной версии (не перезатирается). Суффикс `__history` (9 симв., как `__current`,
+  укладывается в 63 при base≤54).
+- `provision` создаёт три таблицы (draft/current/history) + ALTER для всех.
+- `publish` в той же tx, что и пересборка `__current`, идемпотентно (по version_id)
+  дописывает снимок версии в `__history`.
+- Read: `RelationalStoreService.listPublishedItems(versionId)` → `CodeItemDto` из истории;
+  REST `GET …/published-items?version_id=`. Это даёт distribution'у произвольную версию.
+- Pure-тест на имя/длину `__history`.
+
+### Дальше по Stage 7 (порядок)
+
+- **7b** — distribution читает из `rd_data`: `DistributionService` резолвит версию как
+  сейчас (semver/`knowledge_as_of` по `code_set_version`), но items берёт из `__history`
+  (по version_id) / `__current` (latest). Нужна выгрузка/lookup/пагинация на колонках.
+- **7c** — write-flip: `AuthoringService` пишет ТОЛЬКО в `__draft` (relational — source of
+  truth), `code_item` больше не ведущий; closure/diff/publish уже на rd_data.
+- **7d** — publishing canonical/`content_hash` из `rd_data` (общий `CanonicalSnapshot` уже
+  готов — переключить `PublishedSnapshotPort`/verify на `__history`).
+- **7e** — миграция: drop jsonb-колонок/индексов `code_item`/`code_set_schema`, снос
+  `code_item_closure`/диффовых путей; обновить DAO. **Необратимо** — только после зелёных CI ITs.
+
 ## Риски / открытые вопросы
 
 - **Версионность**: выбран вариант C (draft + current). `__current` хранит только
