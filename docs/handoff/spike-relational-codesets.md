@@ -275,12 +275,23 @@ PUBLISHED-снапшот (`__current` перезатирается на publish'
   объёмы). DAO-методы чтения items из `code_item` больше не вызываются (удалим в 7e).
   Pure-тест `DistributionServiceTest.effectiveAt`. NB: версии, опубликованные до Stage 7a,
   в `__history` отсутствуют — нужен re-publish/backfill (transition gap).
-- **7c** — write-flip: `AuthoringService` пишет ТОЛЬКО в `__draft` (relational — source of
-  truth), `code_item` больше не ведущий; closure/diff/publish уже на rd_data.
-- **7d** — publishing canonical/`content_hash` из `rd_data` (общий `CanonicalSnapshot` уже
-  готов — переключить `PublishedSnapshotPort`/verify на `__history`).
-- **7e** — миграция: drop jsonb-колонок/индексов `code_item`/`code_set_schema`, снос
-  `code_item_closure`/диффовых путей; обновить DAO. **Необратимо** — только после зелёных CI ITs.
+- **7c — write-flip** ✅ СДЕЛАНО: `code_item` больше не пишется/читается authoring'ом.
+  Реляц.таблицы получили операционные колонки `id`(uuid)+`row_version`(integer) (в
+  content_hash/diff не участвуют — `NON_CONTENT_COLUMNS`). `RelationalStoreService` —
+  insert/update(CAS по row_version)/delete по id, `clearDraft`, `listDraftItemsPage`+
+  `countDraftItems`, `findDraftItemById`/`ByKey`, `cloneDraftFromPublished` (из `__history`
+  в `__draft` с новыми id; `codesetId` явно — новая версия может быть ещё не закоммичена).
+  `AuthoringService` весь переключён (createDraft клонирует из истории; add/update/delete/
+  bulk/clear/listItems/findItemByKey/diff; `item_count` из `__draft`).
+- **7d — publishing canonical из `rd_data`** ✅ СДЕЛАНО: `PublishedSnapshotAdapter.
+  canonicalSnapshotBytes` берёт строки версии из `__draft` (publishing читает их до
+  publish-CAS) и хэширует тем же `CanonicalSnapshot` → `content_hash` сохраняется.
+  `onVersionPublished` больше не зовёт `syncFromVersion` (draft уже источник).
+- **7e — миграция drop jsonb + снос generic-пути** ⏸ НЕ СДЕЛАНО, **gated на зелёном CI**:
+  drop jsonb-колонок/индексов `code_item`/`code_set_schema`, снос `code_item_closure`,
+  удаление мёртвого code_item-кода (DAO, `cloneItems`, mirror-helpers). **Необратимо**;
+  write/read flip (7c/7d) локально не проверен (нет Testcontainers ITs) — дропать старый
+  стор до подтверждения боевой работы `rd_data` в CI нельзя (не будет отката).
 
 ## Риски / открытые вопросы
 
