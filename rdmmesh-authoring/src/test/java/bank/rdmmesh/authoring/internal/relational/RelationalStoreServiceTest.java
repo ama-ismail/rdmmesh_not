@@ -77,8 +77,10 @@ class RelationalStoreServiceTest {
         row.put("description_ru", "опорное");
         row.put("order_index", 7);
         row.put("parent_key", "[\"000\"]");        // jsonb-текст
+        row.put("parent_ref", "{\"codeset\":\"x\",\"key\":[\"9\"]}");  // jsonb cross-ref
         row.put("status", "ACTIVE");
         row.put("effective_from", "2026-01-01");
+        row.put("system_from", "2026-06-10T12:00:00Z");
 
         UUID version = UUID.randomUUID();
         CodeItemDto dto = RelationalStoreService.projectRow(
@@ -91,13 +93,14 @@ class RelationalStoreServiceTest {
         assertThat(dto.labelRu()).isEqualTo("Отделение 001");
         assertThat(dto.descriptionRu()).isEqualTo("опорное");
         assertThat(dto.parentKey()).containsExactly("000");
+        assertThat(dto.parentRef()).containsEntry("codeset", "x");
         assertThat(dto.orderIndex()).isEqualTo(7);
         assertThat(dto.status()).isEqualTo("ACTIVE");
         assertThat(dto.effectiveFrom()).isEqualTo("2026-01-01");
+        assertThat(dto.systemFrom()).isEqualTo("2026-06-10T12:00:00Z");
         assertThat(dto.versionId()).isEqualTo(version.toString());
         // нет в relational-модели:
         assertThat(dto.id()).isNull();
-        assertThat(dto.parentRef()).isNull();
         assertThat(dto.rowVersion()).isNull();
     }
 

@@ -672,6 +672,7 @@ public final class AuthoringService {
                 dto.keyParts(),
                 dto.attributes(),
                 dto.parentKey(),
+                dto.parentRef(),
                 dto.labelRu(),
                 dto.labelEn(),
                 dto.descriptionRu(),
@@ -679,7 +680,9 @@ public final class AuthoringService {
                 dto.orderIndex(),
                 dto.status(),
                 dto.effectiveFrom(),
-                dto.effectiveTo()));
+                dto.effectiveTo(),
+                dto.systemFrom(),
+                dto.systemTo()));
     }
 
     /**

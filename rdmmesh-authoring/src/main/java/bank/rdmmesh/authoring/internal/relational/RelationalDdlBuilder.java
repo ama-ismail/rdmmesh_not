@@ -43,10 +43,14 @@ public final class RelationalDdlBuilder {
             new Column("description_ru", "text", false),
             new Column("description_en", "text", false),
             new Column("parent_key", "jsonb", false),
+            new Column("parent_ref", "jsonb", false),
             new Column("order_index", "integer", false),
             new Column("status", "text", true, "'ACTIVE'"),
             new Column("effective_from", "date", false),
-            new Column("effective_to", "date", false));
+            new Column("effective_to", "date", false),
+            // Bitemporal system-time envelope (Stage 4-full), зеркало code_item.system_*.
+            new Column("system_from", "timestamptz", false),
+            new Column("system_to", "timestamptz", false));
 
     private RelationalDdlBuilder() {}
 

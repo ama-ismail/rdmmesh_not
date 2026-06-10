@@ -175,6 +175,7 @@ public final class RelationalStoreService {
             List<String> keyParts,
             Map<String, Object> attributes,
             List<String> parentKey,
+            Map<String, Object> parentRef,
             String labelRu,
             String labelEn,
             String descriptionRu,
@@ -182,11 +183,14 @@ public final class RelationalStoreService {
             Integer orderIndex,
             String status,
             String effectiveFrom,
-            String effectiveTo) {
+            String effectiveTo,
+            String systemFrom,
+            String systemTo) {
         ResolvedTable t = ensureProvisioned(codesetIdOf(versionId));
         Map<String, Object> cells = itemCells(
-                t, keyParts, attributes, parentKey, labelRu, labelEn,
-                descriptionRu, descriptionEn, orderIndex, status, effectiveFrom, effectiveTo);
+                t, keyParts, attributes, parentKey, parentRef, labelRu, labelEn,
+                descriptionRu, descriptionEn, orderIndex, status, effectiveFrom, effectiveTo,
+                systemFrom, systemTo);
         validateCells(t, cells);
         jdbi.useHandle(h -> upsertDraft(h, t, versionId, cells));
     }
@@ -220,10 +224,13 @@ public final class RelationalStoreService {
                         SELECT key_parts::text   AS key_parts_json,
                                attributes::text  AS attributes_json,
                                parent_key::text  AS parent_key_json,
+                               parent_ref::text  AS parent_ref_json,
                                label_ru, label_en, description_ru, description_en,
                                order_index::text AS order_index, status,
                                effective_from::text AS effective_from,
-                               effective_to::text   AS effective_to
+                               effective_to::text   AS effective_to,
+                               system_from::text    AS system_from,
+                               system_to::text      AS system_to
                           FROM authoring.code_item
                          WHERE version_id = :v
                          ORDER BY order_index, id
@@ -233,6 +240,7 @@ public final class RelationalStoreService {
                         rs.getString("key_parts_json"),
                         rs.getString("attributes_json"),
                         rs.getString("parent_key_json"),
+                        rs.getString("parent_ref_json"),
                         rs.getString("label_ru"),
                         rs.getString("label_en"),
                         rs.getString("description_ru"),
@@ -240,7 +248,9 @@ public final class RelationalStoreService {
                         rs.getString("order_index"),
                         rs.getString("status"),
                         rs.getString("effective_from"),
-                        rs.getString("effective_to")))
+                        rs.getString("effective_to"),
+                        rs.getString("system_from"),
+                        rs.getString("system_to")))
                 .list());
 
         int[] loaded = {0};
@@ -386,14 +396,14 @@ public final class RelationalStoreService {
                 asString(row.get("description_ru")),
                 asString(row.get("description_en")),
                 parseStringList(row.get("parent_key"), json),
-                null,
+                parseMap(row.get("parent_ref"), json),
                 attributes,
                 asInteger(row.get("order_index")),
                 asString(row.get("status")),
                 asString(row.get("effective_from")),
                 asString(row.get("effective_to")),
-                null,
-                null,
+                asString(row.get("system_from")),
+                asString(row.get("system_to")),
                 null);
     }
 
@@ -423,6 +433,21 @@ public final class RelationalStoreService {
         }
         try {
             return json.readValue(text, new TypeReference<List<String>>() {});
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static Map<String, Object> parseMap(Object v, ObjectMapper json) {
+        if (v == null) {
+            return null;
+        }
+        String text = v.toString();
+        if (text.isBlank() || "null".equals(text)) {
+            return null;
+        }
+        try {
+            return json.readValue(text, new TypeReference<Map<String, Object>>() {});
         } catch (Exception e) {
             return null;
         }
@@ -621,6 +646,7 @@ public final class RelationalStoreService {
             List<String> keyParts,
             Map<String, Object> attributes,
             List<String> parentKey,
+            Map<String, Object> parentRef,
             String labelRu,
             String labelEn,
             String descriptionRu,
@@ -628,7 +654,9 @@ public final class RelationalStoreService {
             Integer orderIndex,
             String status,
             String effectiveFrom,
-            String effectiveTo) {
+            String effectiveTo,
+            String systemFrom,
+            String systemTo) {
         Map<String, Object> cells = keyCellsOf(t, keyParts);
         if (attributes != null) {
             attributes.forEach((name, value) -> {
@@ -637,8 +665,9 @@ public final class RelationalStoreService {
                 }
             });
         }
-        // parent_key — jsonb-массив (coerce сериализует List в JSON-текст).
+        // parent_key/parent_ref — jsonb (coerce сериализует List/Map в JSON-текст).
         putIfNotNull(cells, "parent_key", parentKey);
+        putIfNotNull(cells, "parent_ref", parentRef);
         putIfNotNull(cells, "label_ru", labelRu);
         putIfNotNull(cells, "label_en", labelEn);
         putIfNotNull(cells, "description_ru", descriptionRu);
@@ -647,6 +676,8 @@ public final class RelationalStoreService {
         putIfNotNull(cells, "status", status);
         putIfNotNull(cells, "effective_from", effectiveFrom);
         putIfNotNull(cells, "effective_to", effectiveTo);
+        putIfNotNull(cells, "system_from", systemFrom);
+        putIfNotNull(cells, "system_to", systemTo);
         return cells;
     }
 
@@ -688,6 +719,7 @@ public final class RelationalStoreService {
             throw new IllegalStateException("cannot parse code_item json", e);
         }
         putIfNotNull(cells, "parent_key", item.parentKeyJson());
+        putIfNotNull(cells, "parent_ref", item.parentRefJson());
         putIfNotNull(cells, "label_ru", item.labelRu());
         putIfNotNull(cells, "label_en", item.labelEn());
         putIfNotNull(cells, "description_ru", item.descriptionRu());
@@ -696,6 +728,8 @@ public final class RelationalStoreService {
         putIfNotNull(cells, "status", item.status());
         putIfNotNull(cells, "effective_from", item.effectiveFrom());
         putIfNotNull(cells, "effective_to", item.effectiveTo());
+        putIfNotNull(cells, "system_from", item.systemFrom());
+        putIfNotNull(cells, "system_to", item.systemTo());
         return cells;
     }
 
@@ -748,6 +782,7 @@ public final class RelationalStoreService {
             String keyPartsJson,
             String attributesJson,
             String parentKeyJson,
+            String parentRefJson,
             String labelRu,
             String labelEn,
             String descriptionRu,
@@ -755,5 +790,7 @@ public final class RelationalStoreService {
             String orderIndex,
             String status,
             String effectiveFrom,
-            String effectiveTo) {}
+            String effectiveTo,
+            String systemFrom,
+            String systemTo) {}
 }
