@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.core.statement.UnableToExecuteStatementException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -84,7 +85,7 @@ public final class RelationalStoreService {
             return;
         }
         try {
-            syncFromVersion(versionId);
+            // Stage 7c: draft уже источник истины — sync из code_item больше не нужен.
             PublishResult res = publish(versionId);
             log.info("relational store: __current пересобран после publish version_id={} ({} строк)",
                     versionId, res.rowsPublished());
@@ -426,7 +427,7 @@ public final class RelationalStoreService {
             }
         }
         return new CodeItemDto(
-                null,
+                asString(row.get("id")),
                 versionId == null ? null : versionId.toString(),
                 keyParts,
                 asString(row.get("label_ru")),
@@ -442,7 +443,7 @@ public final class RelationalStoreService {
                 asString(row.get("effective_to")),
                 asString(row.get("system_from")),
                 asString(row.get("system_to")),
-                null);
+                asInteger(row.get("row_version")));
     }
 
     private static String asString(Object v) {
@@ -640,25 +641,34 @@ public final class RelationalStoreService {
             throw new IllegalArgumentException("cannot diff across codesets");
         }
         ResolvedTable t = requireProvisioned(codesetId);
-        List<Map<String, Object>> from = rawDraftRows(t, fromVersionId);
-        List<Map<String, Object>> to = rawDraftRows(t, toVersionId);
+        List<Map<String, Object>> from = rowsForVersion(t, fromVersionId);
+        List<Map<String, Object>> to = rowsForVersion(t, toVersionId);
         return diffRows(t.keyNames, diffColumns(t), from, to);
     }
 
-    private List<Map<String, Object>> rawDraftRows(ResolvedTable t, UUID versionId) {
+    /** Строки версии: из {@code __draft} (если есть), иначе из {@code __history} (PUBLISHED). */
+    private List<Map<String, Object>> rowsForVersion(ResolvedTable t, UUID versionId) {
+        List<Map<String, Object>> draft = rawRows(t.draftTable, versionId);
+        return draft.isEmpty() ? rawRows(t.historyTable, versionId) : draft;
+    }
+
+    private List<Map<String, Object>> rawRows(String table, UUID versionId) {
         return jdbi.withHandle(h -> h.createQuery(
-                        "SELECT * FROM " + qTable(t.draftTable) + " WHERE version_id = CAST(:v AS uuid)")
+                        "SELECT * FROM " + qTable(table) + " WHERE version_id = CAST(:v AS uuid)")
                 .bind("v", versionId)
                 .mapToMap()
                 .list());
     }
 
-    /** Содержательные колонки для diff: dataColumns без ключей и без system_* (always-changing). */
+    /** Содержательные колонки для diff: dataColumns без ключей, system_*, id, row_version. */
+    private static final Set<String> NON_CONTENT_COLUMNS =
+            Set.of("system_from", "system_to", "id", "row_version");
+
     private static List<String> diffColumns(ResolvedTable t) {
         List<String> out = new ArrayList<>();
         for (Column c : t.dataColumns) {
             String n = c.name();
-            if (!t.keyNames.contains(n) && !"system_from".equals(n) && !"system_to".equals(n)) {
+            if (!t.keyNames.contains(n) && !NON_CONTENT_COLUMNS.contains(n)) {
                 out.add(n);
             }
         }
@@ -775,6 +785,203 @@ public final class RelationalStoreService {
             }
             return q.map((rs, ctx) -> parseStringList(rs.getString("self_key"), json)).list();
         });
+    }
+
+    // ── authoring write-flip (Stage 7c): rd_data — источник истины ─────────────────
+
+    /** INSERT новой строки draft (новый id, row_version=0). Дубликат ключа → IllegalArgumentException. */
+    public CodeItemDto insertDraftItem(
+            UUID versionId, List<String> keyParts, Map<String, Object> attributes, List<String> parentKey,
+            Map<String, Object> parentRef, String labelRu, String labelEn, String descriptionRu,
+            String descriptionEn, Integer orderIndex, String status, String effectiveFrom, String effectiveTo) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        Map<String, Object> cells = itemCells(t, keyParts, attributes, parentKey, parentRef, labelRu, labelEn,
+                descriptionRu, descriptionEn, orderIndex, status, effectiveFrom, effectiveTo, null, null);
+        validateCells(t, cells);
+        UUID id = UUID.randomUUID();
+        cells.put("id", id);
+        cells.put("row_version", 0);
+        try {
+            jdbi.useHandle(h -> insertRow(h, t, versionId, cells));
+        } catch (UnableToExecuteStatementException e) {
+            if (isUniqueViolation(e)) {
+                throw new IllegalArgumentException(
+                        "Item with key " + keyParts + " already exists in this version");
+            }
+            throw e;
+        }
+        return findDraftItemById(versionId, id).orElseThrow();
+    }
+
+    /**
+     * UPDATE строки draft по {@code id} с optimistic-lock (CAS по {@code row_version}).
+     * Возвращает число затронутых строк (0 = нет совпадения: либо нет строки, либо stale).
+     * Передаются уже смерженные значения (caller отвечает за merge patch+current).
+     */
+    public int updateDraftItemById(
+            UUID versionId, UUID itemId, int expectedRowVersion, Map<String, Object> attributes,
+            List<String> parentKey, Map<String, Object> parentRef, String labelRu, String labelEn,
+            String descriptionRu, String descriptionEn, Integer orderIndex, String status,
+            String effectiveFrom, String effectiveTo) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        Map<String, Object> cells = dataCells(t, attributes, parentKey, parentRef, labelRu, labelEn,
+                descriptionRu, descriptionEn, orderIndex, status, effectiveFrom, effectiveTo);
+        StringBuilder set = new StringBuilder();
+        Map<String, Object> binds = new LinkedHashMap<>();
+        int i = 0;
+        for (Map.Entry<String, Object> e : cells.entrySet()) {
+            String name = e.getKey();
+            String type = t.columnTypes.get(name);
+            String p = "p" + i++;
+            if (set.length() > 0) set.append(", ");
+            set.append(RelationalDdlBuilder.q(name)).append(" = CAST(:").append(p)
+                    .append(" AS ").append(type).append(')');
+            binds.put(p, coerce(e.getValue(), type));
+        }
+        if (set.length() > 0) set.append(", ");
+        set.append(RelationalDdlBuilder.q("row_version")).append(" = ")
+                .append(RelationalDdlBuilder.q("row_version")).append(" + 1");
+        String sql = "UPDATE " + qTable(t.draftTable) + " SET " + set
+                + " WHERE version_id = CAST(:v AS uuid)"
+                + " AND " + RelationalDdlBuilder.q("id") + " = CAST(:id AS uuid)"
+                + " AND " + RelationalDdlBuilder.q("row_version") + " = :rv";
+        return jdbi.withHandle(h -> {
+            var u = h.createUpdate(sql);
+            binds.forEach(u::bind);
+            return u.bind("v", versionId).bind("id", itemId).bind("rv", expectedRowVersion).execute();
+        });
+    }
+
+    /** DELETE строки draft по id. */
+    public boolean deleteDraftItemById(UUID versionId, UUID itemId) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        int n = jdbi.withHandle(h -> h.createUpdate("DELETE FROM " + qTable(t.draftTable)
+                        + " WHERE version_id = CAST(:v AS uuid) AND " + RelationalDdlBuilder.q("id")
+                        + " = CAST(:id AS uuid)")
+                .bind("v", versionId).bind("id", itemId).execute());
+        return n > 0;
+    }
+
+    /** DELETE всех строк draft версии; возвращает количество. */
+    public int clearDraft(UUID versionId) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        return jdbi.withHandle(h -> h.createUpdate(
+                        "DELETE FROM " + qTable(t.draftTable) + " WHERE version_id = CAST(:v AS uuid)")
+                .bind("v", versionId).execute());
+    }
+
+    /** Страница строк draft версии → CodeItemDto. */
+    public List<CodeItemDto> listDraftItemsPage(UUID versionId, int offset, int size) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        List<Map<String, Object>> rows = jdbi.withHandle(h -> h.createQuery(
+                        "SELECT * FROM " + qTable(t.draftTable)
+                                + " WHERE version_id = CAST(:v AS uuid)" + orderByClause(t)
+                                + " OFFSET :off LIMIT :lim")
+                .bind("v", versionId).bind("off", offset).bind("lim", size)
+                .mapToMap().list());
+        return projectRows(t, versionId, rows);
+    }
+
+    /** Число строк draft версии. */
+    public int countDraftItems(UUID versionId) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        return jdbi.withHandle(h -> h.createQuery(
+                        "SELECT count(*) FROM " + qTable(t.draftTable) + " WHERE version_id = CAST(:v AS uuid)")
+                .bind("v", versionId).mapTo(Integer.class).one());
+    }
+
+    /** Поиск строки draft по id. */
+    public Optional<CodeItemDto> findDraftItemById(UUID versionId, UUID itemId) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        return jdbi.withHandle(h -> h.createQuery("SELECT * FROM " + qTable(t.draftTable)
+                        + " WHERE version_id = CAST(:v AS uuid) AND " + RelationalDdlBuilder.q("id")
+                        + " = CAST(:id AS uuid)")
+                .bind("v", versionId).bind("id", itemId).mapToMap().findOne())
+                .map(row -> projectRow(t.keyNames, attrNames(t), row, versionId, json));
+    }
+
+    /** Поиск строки draft по ключу. */
+    public Optional<CodeItemDto> findDraftItemByKey(UUID versionId, List<String> keyParts) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        Map<String, Object> keyCells = keyCellsOf(t, keyParts);
+        StringBuilder where = new StringBuilder("version_id = CAST(:v AS uuid)");
+        Map<String, Object> binds = new LinkedHashMap<>();
+        binds.put("v", versionId);
+        int i = 0;
+        for (String key : t.keyNames) {
+            String p = "k" + i++;
+            where.append(" AND ").append(RelationalDdlBuilder.q(key))
+                    .append(" = CAST(:").append(p).append(" AS ").append(t.columnTypes.get(key)).append(')');
+            binds.put(p, coerce(keyCells.get(key), t.columnTypes.get(key)));
+        }
+        String sql = "SELECT * FROM " + qTable(t.draftTable) + " WHERE " + where;
+        return jdbi.withHandle(h -> {
+            var q = h.createQuery(sql);
+            binds.forEach(q::bind);
+            return q.mapToMap().findOne();
+        }).map(row -> projectRow(t.keyNames, attrNames(t), row, versionId, json));
+    }
+
+    /**
+     * Клон items опубликованной версии {@code baseVersionId} (из {@code __history}) в draft новой
+     * версии {@code newVersionId}: новые id, row_version=0. {@code codesetId} передаётся явно —
+     * {@code newVersionId} может быть ещё не закоммичен (вызов из createDraft-tx). Возвращает число строк.
+     */
+    public int cloneDraftFromPublished(UUID codesetId, UUID baseVersionId, UUID newVersionId) {
+        ResolvedTable t = requireProvisioned(codesetId);
+        StringBuilder cols = new StringBuilder();
+        for (Column c : t.dataColumns) {
+            if ("id".equals(c.name()) || "row_version".equals(c.name())) {
+                continue;
+            }
+            if (cols.length() > 0) cols.append(", ");
+            cols.append(RelationalDdlBuilder.q(c.name()));
+        }
+        String vid = RelationalDdlBuilder.q("version_id");
+        String idCol = RelationalDdlBuilder.q("id");
+        String rv = RelationalDdlBuilder.q("row_version");
+        String sql = "INSERT INTO " + qTable(t.draftTable) + " (" + vid + ", " + idCol + ", " + rv + ", " + cols + ")"
+                + " SELECT CAST(:new AS uuid), gen_random_uuid(), 0, " + cols
+                + " FROM " + qTable(t.historyTable) + " WHERE version_id = CAST(:base AS uuid)";
+        return jdbi.withHandle(h -> h.createUpdate(sql)
+                .bind("new", newVersionId).bind("base", baseVersionId).execute());
+    }
+
+    /** Plain INSERT строки (без ON CONFLICT) — version_id биндится отдельно. */
+    private void insertRow(Handle h, ResolvedTable t, UUID versionId, Map<String, Object> cells) {
+        StringBuilder cols = new StringBuilder(RelationalDdlBuilder.q("version_id"));
+        StringBuilder vals = new StringBuilder("CAST(:pv AS uuid)");
+        Map<String, Object> binds = new LinkedHashMap<>();
+        binds.put("pv", versionId);
+        int i = 0;
+        for (Map.Entry<String, Object> e : cells.entrySet()) {
+            if (e.getValue() == null) {
+                continue;
+            }
+            String name = e.getKey();
+            String type = t.columnTypes.get(name);
+            String p = "p" + i++;
+            cols.append(", ").append(RelationalDdlBuilder.q(name));
+            vals.append(", CAST(:").append(p).append(" AS ").append(type).append(')');
+            binds.put(p, coerce(e.getValue(), type));
+        }
+        String sql = "INSERT INTO " + qTable(t.draftTable) + " (" + cols + ") VALUES (" + vals + ')';
+        var u = h.createUpdate(sql);
+        binds.forEach(u::bind);
+        u.execute();
+    }
+
+    /** Canonical bytes версии из {@code __draft} (для content_hash/подписи; publishing читает до publish'а). */
+    public byte[] canonicalBytes(UUID versionId) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        List<Map<String, Object>> rows = jdbi.withHandle(h -> h.createQuery(
+                        "SELECT * FROM " + qTable(t.draftTable) + " WHERE version_id = CAST(:v AS uuid)")
+                .bind("v", versionId).mapToMap().list());
+        return CanonicalSnapshot.bytes(versionId.toString(), canonicalItems(t, rows));
+    }
+
+    private static boolean isUniqueViolation(UnableToExecuteStatementException e) {
+        return e.getCause() instanceof java.sql.SQLException sql && "23505".equals(sql.getSQLState());
     }
 
     // ── row write helper ─────────────────────────────────────────────────────────
@@ -983,6 +1190,28 @@ public final class RelationalStoreService {
             String systemFrom,
             String systemTo) {
         Map<String, Object> cells = keyCellsOf(t, keyParts);
+        cells.putAll(dataCells(t, attributes, parentKey, parentRef, labelRu, labelEn,
+                descriptionRu, descriptionEn, orderIndex, status, effectiveFrom, effectiveTo));
+        putIfNotNull(cells, "system_from", systemFrom);
+        putIfNotNull(cells, "system_to", systemTo);
+        return cells;
+    }
+
+    /** Не-ключевые содержательные колонки (атрибуты + label/desc/parent/order/status/effective). */
+    private Map<String, Object> dataCells(
+            ResolvedTable t,
+            Map<String, Object> attributes,
+            List<String> parentKey,
+            Map<String, Object> parentRef,
+            String labelRu,
+            String labelEn,
+            String descriptionRu,
+            String descriptionEn,
+            Integer orderIndex,
+            String status,
+            String effectiveFrom,
+            String effectiveTo) {
+        Map<String, Object> cells = new LinkedHashMap<>();
         if (attributes != null) {
             attributes.forEach((name, value) -> {
                 if (t.columnTypes.containsKey(name) && !t.keyNames.contains(name)) {
@@ -1001,8 +1230,6 @@ public final class RelationalStoreService {
         putIfNotNull(cells, "status", status);
         putIfNotNull(cells, "effective_from", effectiveFrom);
         putIfNotNull(cells, "effective_to", effectiveTo);
-        putIfNotNull(cells, "system_from", systemFrom);
-        putIfNotNull(cells, "system_to", systemTo);
         return cells;
     }
 

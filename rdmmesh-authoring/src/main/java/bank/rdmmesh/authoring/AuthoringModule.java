@@ -54,9 +54,10 @@ public final class AuthoringModule {
         return new VersionLifecycleAdapter(jdbi);
     }
 
-    /** Read-side порт canonical snapshot bytes для publishing (E6). */
-    public static PublishedSnapshotPort buildSnapshotPort(Jdbi jdbi) {
-        return new PublishedSnapshotAdapter(jdbi);
+    /** Read-side порт canonical snapshot bytes для publishing (E6). Stage 7c: из rd_data. */
+    public static PublishedSnapshotPort buildSnapshotPort(
+            Jdbi jdbi, CatalogReadPort catalog, ObjectMapper json) {
+        return new PublishedSnapshotAdapter(new RelationalStoreService(jdbi, catalog, json));
     }
 
     /** Read-side порт реляционного стора (rd_data) для distribution (Stage 7b). */

@@ -52,7 +52,11 @@ public final class RelationalDdlBuilder {
             new Column("effective_to", "date", false),
             // Bitemporal system-time envelope (Stage 4-full), зеркало code_item.system_*.
             new Column("system_from", "timestamptz", false),
-            new Column("system_to", "timestamptz", false));
+            new Column("system_to", "timestamptz", false),
+            // Операционные колонки (Stage 7c write-flip): стабильный id строки для id-based
+            // API и row_version для optimistic-lock. В content_hash/diff НЕ участвуют.
+            new Column("id", "uuid", false),
+            new Column("row_version", "integer", true, "0"));
 
     private RelationalDdlBuilder() {}
 

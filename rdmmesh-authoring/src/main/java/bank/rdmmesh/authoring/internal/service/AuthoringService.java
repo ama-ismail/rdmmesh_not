@@ -174,9 +174,10 @@ public final class AuthoringService {
                     newId, codesetId, version, codeSet.schemaVersion(), releaseChannel, createdBy);
             if (n != 1) throw new IllegalStateException("INSERT code_set_version returned " + n);
 
-            int copied = base.map(b -> cloneItems(handle, b.id(), newId)).orElse(0);
-            // Closure обслуживается AFTER-INSERT триггером (V022). Каждый INSERT в
-            // code_item уже подцепил свою цепочку; rebuild не нужен.
+            // Stage 7c: items живут в rd_data. Материализуем таблицы и клонируем base
+            // (последнюю published) из __history в __draft новой версии.
+            relationalStore.provision(codesetId);
+            int copied = base.map(b -> relationalStore.cloneDraftFromPublished(codesetId, b.id(), newId)).orElse(0);
             versionDao.setItemCount(newId, copied);
 
             log.info(
@@ -253,61 +254,37 @@ public final class AuthoringService {
         if (size <= 0) size = 100;
         if (size > 10_000) size = 10_000;
         int offset = page * size;
-        int finalSize = size;
-        int finalPage = page;
-        return jdbi.withHandle(h -> {
-            CodeItemDao dao = h.attach(CodeItemDao.class);
-            int total = dao.countByVersion(versionId);
-            List<CodeItemDto> items = dao.page(versionId, offset, finalSize).stream()
-                    .map(AuthoringMappers::toItem)
-                    .toList();
-            return new ItemsPage(finalPage, finalSize, total, items);
-        });
+        // Stage 7c: читаем из rd_data (__draft версии).
+        int total = relationalStore.countDraftItems(versionId);
+        List<CodeItemDto> items = relationalStore.listDraftItemsPage(versionId, offset, size);
+        return new ItemsPage(page, size, total, items);
     }
 
     public Optional<CodeItemDto> findItemByKey(UUID versionId, List<String> keyParts) {
-        return jdbi.withExtension(CodeItemDao.class, dao -> dao.findByKey(versionId, jsonOf(keyParts)))
-                .map(AuthoringMappers::toItem);
+        return relationalStore.findDraftItemByKey(versionId, keyParts);
     }
 
     public CodeItemDto addItem(UUID versionId, NewItem req, UUID author) {
         VersionContext ctx = loadDraftContext(versionId);
         validateOrThrow(ctx, req.attributes(), keyDescription(req.keyParts()));
 
-        CodeItemDto created = jdbi.inTransaction(handle -> {
-            CodeItemDao dao = handle.attach(CodeItemDao.class);
-            UUID id = UUID.randomUUID();
-            try {
-                int n = dao.insert(
-                        id,
-                        versionId,
-                        jsonOf(req.keyParts()),
-                        jsonOfNullable(req.parentKey()),
-                        jsonOfNullable(req.parentRef()),
-                        req.labelRu(),
-                        req.labelEn(),
-                        req.descriptionRu(),
-                        req.descriptionEn(),
-                        jsonOfNullable(req.attributes() == null ? Map.of() : req.attributes()),
-                        req.orderIndex(),
-                        req.status(),
-                        req.effectiveFrom(),
-                        req.effectiveTo());
-                if (n != 1) throw new IllegalStateException("INSERT code_item returned " + n);
-            } catch (UnableToExecuteStatementException e) {
-                if (isUniqueViolation(e)) {
-                    throw new IllegalArgumentException(
-                            "Item with key " + req.keyParts() + " already exists in this version");
-                }
-                throw e;
-            }
-            // Closure обновляется AFTER-INSERT триггером (V022).
-            int count = handle.attach(CodeItemDao.class).countByVersion(versionId);
-            handle.attach(CodeSetVersionDao.class).setItemCount(versionId, count);
-            log.debug("authoring: + item version_id={} key={} by={}", versionId, req.keyParts(), author);
-            return AuthoringMappers.toItem(dao.findById(id).orElseThrow());
-        });
-        mirrorUpsert(versionId, created);
+        // Stage 7c: пишем в rd_data (__draft). row_version/id/optimistic-lock — на колонках.
+        CodeItemDto created = relationalStore.insertDraftItem(
+                versionId,
+                req.keyParts(),
+                req.attributes() == null ? Map.of() : req.attributes(),
+                req.parentKey(),
+                req.parentRef(),
+                req.labelRu(),
+                req.labelEn(),
+                req.descriptionRu(),
+                req.descriptionEn(),
+                req.orderIndex(),
+                req.status(),
+                dateText(req.effectiveFrom()),
+                dateText(req.effectiveTo()));
+        refreshItemCount(versionId);
+        log.debug("authoring: + item version_id={} key={} by={}", versionId, req.keyParts(), author);
         return created;
     }
 
@@ -317,61 +294,43 @@ public final class AuthoringService {
             validateOrThrow(ctx, patch.attributes(), "id=" + itemId);
         }
 
-        CodeItemDto updated = jdbi.inTransaction(handle -> {
-            CodeItemDao dao = handle.attach(CodeItemDao.class);
-            ItemRow current = dao.findById(itemId)
-                    .filter(r -> r.versionId().equals(versionId))
-                    .orElseThrow(() ->
-                            new IllegalArgumentException("Item not found: " + itemId + " in version " + versionId));
+        // Stage 7c: читаем current из rd_data, мерджим patch, CAS по row_version.
+        CodeItemDto current = relationalStore.findDraftItemById(versionId, itemId)
+                .orElseThrow(() ->
+                        new IllegalArgumentException("Item not found: " + itemId + " in version " + versionId));
 
-            int n = dao.updateInDraft(
-                    itemId,
-                    patch.expectedRowVersion(),
-                    patch.parentKey() == null ? current.parentKeyJson() : jsonOfNullable(patch.parentKey()),
-                    patch.parentRef() == null ? current.parentRefJson() : jsonOfNullable(patch.parentRef()),
-                    patch.labelRu() != null ? patch.labelRu() : current.labelRu(),
-                    patch.labelEn() != null ? patch.labelEn() : current.labelEn(),
-                    patch.descriptionRu() != null ? patch.descriptionRu() : current.descriptionRu(),
-                    patch.descriptionEn() != null ? patch.descriptionEn() : current.descriptionEn(),
-                    patch.attributes() == null ? current.attributesJson() : jsonOfNullable(patch.attributes()),
-                    patch.orderIndex(),
-                    patch.status(),
-                    patch.effectiveFrom() != null ? patch.effectiveFrom() : current.effectiveFrom(),
-                    patch.effectiveTo() != null ? patch.effectiveTo() : current.effectiveTo());
-            if (n == 0) {
-                throw new OptimisticLockException("Stale row_version for item " + itemId + ": expected "
-                        + patch.expectedRowVersion() + " (current " + current.rowVersion() + ")");
-            }
-            // Closure обновляется AFTER-UPDATE-OF-parent_key триггером (V022).
-            // На UPDATE без изменения parent_key триггер — no-op (см. V022).
-            log.debug("authoring: ~ item version_id={} id={} by={}", versionId, itemId, author);
-            return AuthoringMappers.toItem(dao.findById(itemId).orElseThrow());
-        });
-        mirrorUpsert(versionId, updated);
-        return updated;
+        int n = relationalStore.updateDraftItemById(
+                versionId,
+                itemId,
+                patch.expectedRowVersion(),
+                patch.attributes() != null ? patch.attributes() : current.attributes(),
+                patch.parentKey() != null ? patch.parentKey() : current.parentKey(),
+                patch.parentRef() != null ? patch.parentRef() : current.parentRef(),
+                patch.labelRu() != null ? patch.labelRu() : current.labelRu(),
+                patch.labelEn() != null ? patch.labelEn() : current.labelEn(),
+                patch.descriptionRu() != null ? patch.descriptionRu() : current.descriptionRu(),
+                patch.descriptionEn() != null ? patch.descriptionEn() : current.descriptionEn(),
+                patch.orderIndex() != null ? patch.orderIndex() : current.orderIndex(),
+                patch.status() != null ? patch.status() : current.status(),
+                patch.effectiveFrom() != null ? dateText(patch.effectiveFrom()) : current.effectiveFrom(),
+                patch.effectiveTo() != null ? dateText(patch.effectiveTo()) : current.effectiveTo());
+        if (n == 0) {
+            throw new OptimisticLockException("Stale row_version for item " + itemId + ": expected "
+                    + patch.expectedRowVersion() + " (current " + current.rowVersion() + ")");
+        }
+        log.debug("authoring: ~ item version_id={} id={} by={}", versionId, itemId, author);
+        return relationalStore.findDraftItemById(versionId, itemId).orElseThrow();
     }
 
     public boolean deleteItem(UUID versionId, UUID itemId, UUID author) {
         loadDraftContext(versionId); // только чтобы проверить, что это DRAFT
-        Deleted result = jdbi.inTransaction(handle -> {
-            CodeItemDao dao = handle.attach(CodeItemDao.class);
-            // keyParts удаляемой строки нужны для зеркального DELETE в __draft.
-            List<String> keyParts = dao.findById(itemId)
-                    .filter(r -> r.versionId().equals(versionId))
-                    .map(r -> AuthoringMappers.toItem(r).keyParts())
-                    .orElse(null);
-            int n = dao.deleteInDraft(itemId);
-            if (n == 0) return new Deleted(false, null);
-            // Closure обновляется AFTER-DELETE триггером (V022).
-            int count = dao.countByVersion(versionId);
-            handle.attach(CodeSetVersionDao.class).setItemCount(versionId, count);
+        // Stage 7c: удаляем из rd_data (__draft) по id.
+        boolean deleted = relationalStore.deleteDraftItemById(versionId, itemId);
+        if (deleted) {
+            refreshItemCount(versionId);
             log.debug("authoring: - item version_id={} id={} by={}", versionId, itemId, author);
-            return new Deleted(true, keyParts);
-        });
-        if (result.deleted() && result.keyParts() != null) {
-            mirror("delete", versionId, () -> relationalStore.mirrorDeleteItem(versionId, result.keyParts()));
         }
-        return result.deleted();
+        return deleted;
     }
 
     /**
@@ -389,14 +348,10 @@ public final class AuthoringService {
      */
     public int clearAllItems(UUID versionId, UUID actor) {
         loadDraftContext(versionId);
-        int deleted = jdbi.inTransaction(handle -> {
-            CodeItemDao dao = handle.attach(CodeItemDao.class);
-            int n = dao.deleteAllInDraft(versionId);
-            handle.attach(CodeSetVersionDao.class).setItemCount(versionId, 0);
-            log.info("authoring: clear-all items version_id={} deleted={} by={}", versionId, n, actor);
-            return n;
-        });
-        mirror("clear", versionId, () -> relationalStore.mirrorClearDraft(versionId));
+        // Stage 7c: чистим rd_data (__draft версии).
+        int deleted = relationalStore.clearDraft(versionId);
+        jdbi.useExtension(CodeSetVersionDao.class, dao -> dao.setItemCount(versionId, 0));
+        log.info("authoring: clear-all items version_id={} deleted={} by={}", versionId, deleted, actor);
         return deleted;
     }
 
@@ -424,64 +379,52 @@ public final class AuthoringService {
         if (!errors.isEmpty()) {
             return BulkResult.rejected(rows.size(), errors);
         }
-        BulkResult result = jdbi.inTransaction(handle -> {
-            int added = 0, updated = 0, unchanged = 0;
-            CodeItemDao dao = handle.attach(CodeItemDao.class);
-            for (NewItem r : rows) {
-                Optional<ItemRow> existing = dao.findByKey(versionId, jsonOf(r.keyParts()));
-                if (existing.isPresent()) {
-                    ItemRow cur = existing.get();
-                    int n = dao.updateInDraft(
-                            cur.id(),
-                            cur.rowVersion(),
-                            r.parentKey() == null ? cur.parentKeyJson() : jsonOfNullable(r.parentKey()),
-                            r.parentRef() == null ? cur.parentRefJson() : jsonOfNullable(r.parentRef()),
-                            r.labelRu() != null ? r.labelRu() : cur.labelRu(),
-                            r.labelEn() != null ? r.labelEn() : cur.labelEn(),
-                            r.descriptionRu() != null ? r.descriptionRu() : cur.descriptionRu(),
-                            r.descriptionEn() != null ? r.descriptionEn() : cur.descriptionEn(),
-                            r.attributes() == null ? cur.attributesJson() : jsonOfNullable(r.attributes()),
-                            r.orderIndex(),
-                            r.status(),
-                            r.effectiveFrom() != null ? r.effectiveFrom() : cur.effectiveFrom(),
-                            r.effectiveTo() != null ? r.effectiveTo() : cur.effectiveTo());
-                    if (n == 1) updated++;
-                    else unchanged++;
-                } else {
-                    dao.insert(
-                            UUID.randomUUID(),
-                            versionId,
-                            jsonOf(r.keyParts()),
-                            jsonOfNullable(r.parentKey()),
-                            jsonOfNullable(r.parentRef()),
-                            r.labelRu(),
-                            r.labelEn(),
-                            r.descriptionRu(),
-                            r.descriptionEn(),
-                            jsonOfNullable(r.attributes() == null ? Map.of() : r.attributes()),
-                            r.orderIndex(),
-                            r.status(),
-                            r.effectiveFrom(),
-                            r.effectiveTo());
-                    added++;
-                }
+        // Stage 7c: upsert по ключу прямо в rd_data (__draft). UPSERT-семантика
+        // (есть ключ → update, нет → insert) реализуется find+update/insert.
+        int added = 0, updated = 0, unchanged = 0;
+        for (NewItem r : rows) {
+            Optional<CodeItemDto> existing = relationalStore.findDraftItemByKey(versionId, r.keyParts());
+            if (existing.isPresent()) {
+                CodeItemDto cur = existing.get();
+                int n = relationalStore.updateDraftItemById(
+                        versionId,
+                        UUID.fromString(cur.id()),
+                        cur.rowVersion() == null ? 0 : cur.rowVersion(),
+                        r.attributes() != null ? r.attributes() : cur.attributes(),
+                        r.parentKey() != null ? r.parentKey() : cur.parentKey(),
+                        r.parentRef() != null ? r.parentRef() : cur.parentRef(),
+                        r.labelRu() != null ? r.labelRu() : cur.labelRu(),
+                        r.labelEn() != null ? r.labelEn() : cur.labelEn(),
+                        r.descriptionRu() != null ? r.descriptionRu() : cur.descriptionRu(),
+                        r.descriptionEn() != null ? r.descriptionEn() : cur.descriptionEn(),
+                        r.orderIndex() != null ? r.orderIndex() : cur.orderIndex(),
+                        r.status() != null ? r.status() : cur.status(),
+                        r.effectiveFrom() != null ? dateText(r.effectiveFrom()) : cur.effectiveFrom(),
+                        r.effectiveTo() != null ? dateText(r.effectiveTo()) : cur.effectiveTo());
+                if (n == 1) updated++;
+                else unchanged++;
+            } else {
+                relationalStore.insertDraftItem(
+                        versionId,
+                        r.keyParts(),
+                        r.attributes() == null ? Map.of() : r.attributes(),
+                        r.parentKey(),
+                        r.parentRef(),
+                        r.labelRu(),
+                        r.labelEn(),
+                        r.descriptionRu(),
+                        r.descriptionEn(),
+                        r.orderIndex(),
+                        r.status(),
+                        dateText(r.effectiveFrom()),
+                        dateText(r.effectiveTo()));
+                added++;
             }
-            // Closure обновляется построчно AFTER-триггерами (V022).
-            int count = dao.countByVersion(versionId);
-            handle.attach(CodeSetVersionDao.class).setItemCount(versionId, count);
-            log.info(
-                    "authoring: bulk upsert version_id={} added={} updated={} unchanged={} by={}",
-                    versionId,
-                    added,
-                    updated,
-                    unchanged,
-                    author);
-            return BulkResult.applied(rows.size(), added, updated, unchanged);
-        });
-        // Bulk — upsert-only (без удалений): re-sync всей версии корректно отражает
-        // итоговое состояние в __draft (idempotent, дешевле точечного зеркала на пачку).
-        mirror("bulk", versionId, () -> relationalStore.syncFromVersion(versionId));
-        return result;
+        }
+        refreshItemCount(versionId);
+        log.info("authoring: bulk upsert version_id={} added={} updated={} unchanged={} by={}",
+                versionId, added, updated, unchanged, author);
+        return BulkResult.applied(rows.size(), added, updated, unchanged);
     }
 
     public BulkResult bulkUpsertCsv(UUID versionId, InputStream csvIn, UUID author) {
@@ -580,21 +523,22 @@ public final class AuthoringService {
     // ── Diff ────────────────────────────────────────────────────────────────────
 
     public DiffCalculator.Result diff(UUID toVersionId, UUID fromVersionId) {
-        return jdbi.withHandle(handle -> {
-            CodeSetVersionDao versionDao = handle.attach(CodeSetVersionDao.class);
-            VersionRow to = versionDao
-                    .findById(toVersionId)
-                    .orElseThrow(() -> new IllegalArgumentException("Unknown to-version: " + toVersionId));
-            VersionRow from = versionDao
-                    .findById(fromVersionId)
-                    .orElseThrow(() -> new IllegalArgumentException("Unknown from-version: " + fromVersionId));
-            if (!to.codesetId().equals(from.codesetId())) {
-                throw new IllegalArgumentException(
-                        "Cannot diff across codesets: " + to.codesetId() + " vs " + from.codesetId());
-            }
-            var rows = handle.attach(CodeItemDiffDao.class).diff(fromVersionId, toVersionId);
-            return differ.compute(from.version(), to.version(), rows);
-        });
+        VersionRow to = jdbi.withExtension(CodeSetVersionDao.class, dao -> dao.findById(toVersionId))
+                .orElseThrow(() -> new IllegalArgumentException("Unknown to-version: " + toVersionId));
+        VersionRow from = jdbi.withExtension(CodeSetVersionDao.class, dao -> dao.findById(fromVersionId))
+                .orElseThrow(() -> new IllegalArgumentException("Unknown from-version: " + fromVersionId));
+        if (!to.codesetId().equals(from.codesetId())) {
+            throw new IllegalArgumentException(
+                    "Cannot diff across codesets: " + to.codesetId() + " vs " + from.codesetId());
+        }
+        // Stage 7c: колоночный diff по rd_data (__draft/__history), маппим в Result.
+        RelationalStoreService.RelDiffSummary rel = relationalStore.diff(fromVersionId, toVersionId);
+        List<DiffCalculator.Entry> entries = new ArrayList<>();
+        for (RelationalStoreService.RelDiffEntry e : rel.entries()) {
+            entries.add(new DiffCalculator.Entry(e.op(), e.keyParts(), e.changedColumns(), null, null));
+        }
+        return new DiffCalculator.Result(from.version(), to.version(), entries,
+                new DiffCalculator.Summary(rel.added(), rel.changed(), rel.removed(), 0));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────
@@ -610,6 +554,17 @@ public final class AuthoringService {
                 .orElseThrow(() -> new IllegalStateException("Missing CodeSetSchema codeset_id=" + row.codesetId()
                         + " schema_version=" + row.schemaVersion()));
         return new VersionContext(row.codesetId(), row.schemaVersion(), schema.jsonSchemaText());
+    }
+
+    /** LocalDate → ISO-строка для relational-стора (он биндит даты текстом с CAST). */
+    private static String dateText(LocalDate d) {
+        return d == null ? null : d.toString();
+    }
+
+    /** Пересчитывает item_count версии из rd_data (__draft) и пишет в code_set_version. */
+    private void refreshItemCount(UUID versionId) {
+        int count = relationalStore.countDraftItems(versionId);
+        jdbi.useExtension(CodeSetVersionDao.class, dao -> dao.setItemCount(versionId, count));
     }
 
     private void validateOrThrow(VersionContext ctx, Map<String, Object> attributes, String forKey) {

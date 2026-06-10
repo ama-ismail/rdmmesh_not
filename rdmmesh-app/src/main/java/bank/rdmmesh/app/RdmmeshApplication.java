@@ -198,7 +198,8 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         // OutboundPort (OutboxOutboundAdapter) кладёт VersionPublishedEvent в
         // publishing.webhook_outbox для consumer-систем. WebhookDeliveryWorker —
         // Dropwizard Managed — дренирует outbox с retry/backoff.
-        PublishedSnapshotPort snapshots = AuthoringModule.buildSnapshotPort(jdbi);
+        PublishedSnapshotPort snapshots = AuthoringModule.buildSnapshotPort(
+                jdbi, catalogReadPort, environment.getObjectMapper());
         WorkflowJournalPort workflowJournal = WorkflowModule.buildJournalPort(jdbi);
         SigningKeyPort signingKey = EnvSigningKeyAdapter.fromEnv(
                 "RDM_HMAC_KEY",
