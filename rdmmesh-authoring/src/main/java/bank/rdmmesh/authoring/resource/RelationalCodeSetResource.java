@@ -18,6 +18,8 @@ import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import bank.rdmmesh.api.security.RdmmeshPrincipal;
 import bank.rdmmesh.authoring.internal.relational.RelationalStoreService;
 import bank.rdmmesh.authoring.internal.relational.RelationalStoreService.ProvisionResult;
@@ -41,6 +43,8 @@ import io.dropwizard.auth.Auth;
  *   <li>{@code GET    /relational/codesets/{id}/draft-items?version_id=} — черновик → CodeItemDto (Stage 3)</li>
  *   <li>{@code GET    /relational/codesets/{id}/closure[?version_id=]}   — closure иерархии (Stage 4)</li>
  *   <li>{@code GET    /relational/codesets/{id}/cycles[?version_id=]}    — ключи в циклах parent_key (Stage 4)</li>
+ *   <li>{@code GET    /relational/codesets/{id}/content-hash[?version_id=]} — content_hash из rd_data (Stage 5)</li>
+ *   <li>{@code GET    /relational/codesets/{id}/diff?from_version_id=&to_version_id=} — колоночный diff (Stage 5)</li>
  * </ul>
  *
  * <p>Префикс {@code /relational} (а не {@code /codesets}) — чтобы не пересекаться с
@@ -221,6 +225,44 @@ public final class RelationalCodeSetResource {
             return versionId == null || versionId.isBlank()
                     ? store.currentCycles(parseUuid(id))
                     : store.draftCycles(parseUuid(versionId));
+        } catch (IllegalStateException e) {
+            throw conflict(e);
+        }
+    }
+
+    @GET
+    @Path("/content-hash")
+    public ContentHashResponse contentHash(
+            @Auth RdmmeshPrincipal principal,
+            @PathParam("id") String id,
+            @QueryParam("version_id") String versionId) {
+        parseUuid(id);
+        try {
+            String hash = versionId == null || versionId.isBlank()
+                    ? store.currentContentHash(parseUuid(id))
+                    : store.draftContentHash(parseUuid(versionId));
+            return new ContentHashResponse(hash);
+        } catch (IllegalStateException e) {
+            throw conflict(e);
+        }
+    }
+
+    public record ContentHashResponse(@JsonProperty("content_hash") String contentHash) {}
+
+    @GET
+    @Path("/diff")
+    public RelationalStoreService.RelDiffSummary diff(
+            @Auth RdmmeshPrincipal principal,
+            @PathParam("id") String id,
+            @QueryParam("from_version_id") String fromVersionId,
+            @QueryParam("to_version_id") String toVersionId) {
+        parseUuid(id);
+        UUID from = requireVersion(fromVersionId);
+        UUID to = requireVersion(toVersionId);
+        try {
+            return store.diff(from, to);
+        } catch (IllegalArgumentException e) {
+            throw badRequest(e);
         } catch (IllegalStateException e) {
             throw conflict(e);
         }

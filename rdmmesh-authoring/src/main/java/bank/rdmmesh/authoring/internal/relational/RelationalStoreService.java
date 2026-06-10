@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import bank.rdmmesh.api.eventbus.EventBus;
 import bank.rdmmesh.api.eventbus.VersionPublishedDomainEvent;
 import bank.rdmmesh.api.port.CatalogReadPort;
+import bank.rdmmesh.authoring.internal.CanonicalSnapshot;
 import bank.rdmmesh.authoring.internal.dao.PhysicalTableRegistryDao;
 import bank.rdmmesh.authoring.internal.relational.RelationalDdlBuilder.Column;
 import bank.rdmmesh.authoring.resource.CodeItemDto;
@@ -350,16 +351,22 @@ public final class RelationalStoreService {
     }
 
     private List<CodeItemDto> projectRows(ResolvedTable t, UUID versionId, List<Map<String, Object>> rows) {
-        Set<String> standard = RelationalDdlBuilder.standardColumnNames();
-        List<String> attrNames = new ArrayList<>();
-        for (Column c : t.dataColumns) {
-            if (!t.keyNames.contains(c.name()) && !standard.contains(c.name())) {
-                attrNames.add(c.name());
-            }
-        }
+        List<String> attrNames = attrNames(t);
         List<CodeItemDto> out = new ArrayList<>(rows.size());
         for (Map<String, Object> row : rows) {
             out.add(projectRow(t.keyNames, attrNames, row, versionId, json));
+        }
+        return out;
+    }
+
+    /** Имена атрибутивных колонок = dataColumns без ключей и без стандартных. */
+    private static List<String> attrNames(ResolvedTable t) {
+        Set<String> standard = RelationalDdlBuilder.standardColumnNames();
+        List<String> out = new ArrayList<>();
+        for (Column c : t.dataColumns) {
+            if (!t.keyNames.contains(c.name()) && !standard.contains(c.name())) {
+                out.add(c.name());
+            }
         }
         return out;
     }
@@ -451,6 +458,182 @@ public final class RelationalStoreService {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    // ── content_hash из rd_data (Stage 5) ─────────────────────────────────────────
+
+    /**
+     * {@code content_hash} PUBLISHED-снапшота ({@code __current}), посчитанный из физической
+     * таблицы тем же алгоритмом {@link CanonicalSnapshot}, что и {@code code_item}-путь
+     * ({@link bank.rdmmesh.authoring.internal.PublishedSnapshotAdapter}) — при равенстве
+     * данных хэши совпадают. version_id берётся из реестра ({@code published_version_id}).
+     */
+    public String currentContentHash(UUID codesetId) {
+        ResolvedTable t = requireProvisioned(codesetId);
+        UUID published = jdbi.withExtension(PhysicalTableRegistryDao.class, d -> d.findByCodeset(codesetId))
+                .map(PhysicalTableRegistryDao.PhysicalTableRow::publishedVersionId)
+                .orElse(null);
+        if (published == null) {
+            throw new IllegalStateException("codeset " + codesetId + " ещё не публиковался в __current");
+        }
+        List<Map<String, Object>> rows = jdbi.withHandle(h ->
+                h.createQuery("SELECT * FROM " + qTable(t.currentTable)).mapToMap().list());
+        return CanonicalSnapshot.contentHash(published.toString(), canonicalItems(t, rows));
+    }
+
+    /** {@code content_hash} черновика версии ({@code __draft WHERE version_id}). */
+    public String draftContentHash(UUID versionId) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        List<Map<String, Object>> rows = jdbi.withHandle(h -> h.createQuery(
+                        "SELECT * FROM " + qTable(t.draftTable) + " WHERE version_id = CAST(:v AS uuid)")
+                .bind("v", versionId)
+                .mapToMap()
+                .list());
+        return CanonicalSnapshot.contentHash(versionId.toString(), canonicalItems(t, rows));
+    }
+
+    private List<Map<String, Object>> canonicalItems(ResolvedTable t, List<Map<String, Object>> rows) {
+        List<String> attrNames = attrNames(t);
+        List<Map<String, Object>> items = new ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            items.add(canonicalItemFromRow(t, attrNames, row));
+        }
+        return items;
+    }
+
+    /**
+     * Строка физ.таблицы → canonical-item (та же форма, что у {@code code_item}-пути).
+     * Ключи стрингуются (как в jsonb-массиве key_parts); jsonb-атрибуты парсятся обратно
+     * в объект; null-атрибуты опускаются (как и пустой attributes у code_item даёт {@code {}}).
+     */
+    private Map<String, Object> canonicalItemFromRow(
+            ResolvedTable t, List<String> attrNames, Map<String, Object> row) {
+        List<String> keyParts = new ArrayList<>(t.keyNames.size());
+        for (String k : t.keyNames) {
+            keyParts.add(asString(row.get(k)));
+        }
+        Map<String, Object> attributes = new LinkedHashMap<>();
+        for (String a : attrNames) {
+            Object v = row.get(a);
+            if (v == null) {
+                continue;
+            }
+            attributes.put(a, "jsonb".equals(t.columnTypes.get(a))
+                    ? CanonicalSnapshot.parseJson(v.toString())
+                    : v);
+        }
+        return CanonicalSnapshot.item(
+                keyParts,
+                parseStringList(row.get("parent_key"), json),
+                parseMap(row.get("parent_ref"), json),
+                asString(row.get("label_ru")),
+                asString(row.get("label_en")),
+                asString(row.get("description_ru")),
+                asString(row.get("description_en")),
+                attributes,
+                asInteger(row.get("order_index")),
+                asString(row.get("status")),
+                asString(row.get("effective_from")),
+                asString(row.get("effective_to")));
+    }
+
+    // ── колоночный diff (Stage 5) ─────────────────────────────────────────────────
+
+    /**
+     * Колоночный diff двух версий по строкам {@code __draft}: ADDED/REMOVED/CHANGED по ключу,
+     * с перечнем изменённых колонок. Сравниваются содержательные колонки (атрибуты, label,
+     * description, parent_key, parent_ref, order_index, status, effective_*); {@code version_id}
+     * и system-time ({@code system_from}/{@code system_to}, per-insert now()) исключены.
+     */
+    public RelDiffSummary diff(UUID fromVersionId, UUID toVersionId) {
+        UUID codesetId = codesetIdOf(toVersionId);
+        if (!codesetId.equals(codesetIdOf(fromVersionId))) {
+            throw new IllegalArgumentException("cannot diff across codesets");
+        }
+        ResolvedTable t = requireProvisioned(codesetId);
+        List<Map<String, Object>> from = rawDraftRows(t, fromVersionId);
+        List<Map<String, Object>> to = rawDraftRows(t, toVersionId);
+        return diffRows(t.keyNames, diffColumns(t), from, to);
+    }
+
+    private List<Map<String, Object>> rawDraftRows(ResolvedTable t, UUID versionId) {
+        return jdbi.withHandle(h -> h.createQuery(
+                        "SELECT * FROM " + qTable(t.draftTable) + " WHERE version_id = CAST(:v AS uuid)")
+                .bind("v", versionId)
+                .mapToMap()
+                .list());
+    }
+
+    /** Содержательные колонки для diff: dataColumns без ключей и без system_* (always-changing). */
+    private static List<String> diffColumns(ResolvedTable t) {
+        List<String> out = new ArrayList<>();
+        for (Column c : t.dataColumns) {
+            String n = c.name();
+            if (!t.keyNames.contains(n) && !"system_from".equals(n) && !"system_to".equals(n)) {
+                out.add(n);
+            }
+        }
+        return out;
+    }
+
+    /** Чистое ядро diff'а — тестируется без БД на hand-built строках. */
+    static RelDiffSummary diffRows(
+            List<String> keyNames,
+            List<String> diffColumns,
+            List<Map<String, Object>> fromRows,
+            List<Map<String, Object>> toRows) {
+        Map<List<String>, Map<String, Object>> from = indexByKey(keyNames, fromRows);
+        Map<List<String>, Map<String, Object>> to = indexByKey(keyNames, toRows);
+        int added = 0;
+        int changed = 0;
+        int removed = 0;
+        List<RelDiffEntry> entries = new ArrayList<>();
+        for (Map.Entry<List<String>, Map<String, Object>> e : to.entrySet()) {
+            Map<String, Object> before = from.get(e.getKey());
+            if (before == null) {
+                added++;
+                entries.add(new RelDiffEntry("ADDED", e.getKey(), List.of()));
+            } else {
+                List<String> cols = changedColumns(diffColumns, before, e.getValue());
+                if (!cols.isEmpty()) {
+                    changed++;
+                    entries.add(new RelDiffEntry("CHANGED", e.getKey(), cols));
+                }
+            }
+        }
+        for (Map.Entry<List<String>, Map<String, Object>> e : from.entrySet()) {
+            if (!to.containsKey(e.getKey())) {
+                removed++;
+                entries.add(new RelDiffEntry("REMOVED", e.getKey(), List.of()));
+            }
+        }
+        return new RelDiffSummary(added, changed, removed, entries);
+    }
+
+    private static Map<List<String>, Map<String, Object>> indexByKey(
+            List<String> keyNames, List<Map<String, Object>> rows) {
+        Map<List<String>, Map<String, Object>> out = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            List<String> key = new ArrayList<>(keyNames.size());
+            for (String k : keyNames) {
+                key.add(asString(row.get(k)));
+            }
+            out.put(key, row);
+        }
+        return out;
+    }
+
+    private static List<String> changedColumns(
+            List<String> diffColumns, Map<String, Object> before, Map<String, Object> after) {
+        List<String> cols = new ArrayList<>();
+        for (String c : diffColumns) {
+            String a = asString(before.get(c));
+            String b = asString(after.get(c));
+            if (a == null ? b != null : !a.equals(b)) {
+                cols.add(c);
+            }
+        }
+        return cols;
     }
 
     // ── иерархия: closure + cycle-detection (Stage 4-full) ────────────────────────
@@ -832,6 +1015,12 @@ public final class RelationalStoreService {
 
     /** Пара closure-иерархии: предок → потомок на расстоянии {@code depth} рёбер. */
     public record ClosureRow(List<String> ancestorKey, List<String> descendantKey, int depth) {}
+
+    /** Запись колоночного diff'а: {@code op} ∈ ADDED/REMOVED/CHANGED, ключ, изменённые колонки. */
+    public record RelDiffEntry(String op, List<String> keyParts, List<String> changedColumns) {}
+
+    /** Сводка колоночного diff'а двух версий. */
+    public record RelDiffSummary(int added, int changed, int removed, List<RelDiffEntry> entries) {}
 
     private record ItemRow(
             String keyPartsJson,

@@ -120,4 +120,60 @@ class RelationalStoreServiceTest {
         assertThat(dto.attributes()).isEmpty();
         assertThat(dto.status()).isNull();
     }
+
+    // ── колоночный diff (Stage 5) ─────────────────────────────────────────────────
+
+    private static Map<String, Object> row(String code, String label, Object pd) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("code", code);
+        m.put("label_ru", label);
+        m.put("pd", pd);
+        return m;
+    }
+
+    @Test
+    void diffRows_detects_added_removed_changed() {
+        List<String> keys = List.of("code");
+        List<String> cols = List.of("label_ru", "pd");
+        List<Map<String, Object>> from = List.of(
+                row("A", "Альфа", 0.1),
+                row("B", "Бета", 0.2));       // будет CHANGED
+        List<Map<String, Object>> to = List.of(
+                row("B", "Бета", 0.9),         // pd изменился
+                row("C", "Гамма", 0.3));       // ADDED; A — REMOVED
+
+        RelationalStoreService.RelDiffSummary d =
+                RelationalStoreService.diffRows(keys, cols, from, to);
+
+        assertThat(d.added()).isEqualTo(1);
+        assertThat(d.removed()).isEqualTo(1);
+        assertThat(d.changed()).isEqualTo(1);
+        assertThat(d.entries())
+                .anySatisfy(e -> {
+                    assertThat(e.op()).isEqualTo("ADDED");
+                    assertThat(e.keyParts()).containsExactly("C");
+                })
+                .anySatisfy(e -> {
+                    assertThat(e.op()).isEqualTo("REMOVED");
+                    assertThat(e.keyParts()).containsExactly("A");
+                })
+                .anySatisfy(e -> {
+                    assertThat(e.op()).isEqualTo("CHANGED");
+                    assertThat(e.keyParts()).containsExactly("B");
+                    assertThat(e.changedColumns()).containsExactly("pd");
+                });
+    }
+
+    @Test
+    void diffRows_identical_sets_have_no_changes() {
+        List<String> keys = List.of("code");
+        List<String> cols = List.of("label_ru", "pd");
+        List<Map<String, Object>> rows = List.of(row("A", "Альфа", 0.1));
+        RelationalStoreService.RelDiffSummary d =
+                RelationalStoreService.diffRows(keys, cols, rows, rows);
+        assertThat(d.added()).isZero();
+        assertThat(d.removed()).isZero();
+        assertThat(d.changed()).isZero();
+        assertThat(d.entries()).isEmpty();
+    }
 }
