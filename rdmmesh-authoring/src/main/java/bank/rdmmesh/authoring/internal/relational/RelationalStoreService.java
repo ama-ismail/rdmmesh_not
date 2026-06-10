@@ -111,6 +111,10 @@ public final class RelationalStoreService {
         jdbi.useHandle(h -> {
             h.execute(currentDdl);
             h.execute(draftDdl);
+            // Stage 4-lite: идемпотентно доращиваем новые колонки на уже существующих
+            // таблицах (description/parent_key/order_index, эволюция атрибутов).
+            h.execute(RelationalDdlBuilder.addColumnsIfNotExists(SCHEMA, t.currentTable, t.dataColumns));
+            h.execute(RelationalDdlBuilder.addColumnsIfNotExists(SCHEMA, t.draftTable, t.dataColumns));
             h.attach(PhysicalTableRegistryDao.class)
                     .upsert(codesetId, SCHEMA, t.base, t.schemaVersion);
         });
@@ -167,14 +171,19 @@ public final class RelationalStoreService {
             UUID versionId,
             List<String> keyParts,
             Map<String, Object> attributes,
+            List<String> parentKey,
             String labelRu,
             String labelEn,
+            String descriptionRu,
+            String descriptionEn,
+            Integer orderIndex,
             String status,
             String effectiveFrom,
             String effectiveTo) {
         ResolvedTable t = ensureProvisioned(codesetIdOf(versionId));
         Map<String, Object> cells = itemCells(
-                t, keyParts, attributes, labelRu, labelEn, status, effectiveFrom, effectiveTo);
+                t, keyParts, attributes, parentKey, labelRu, labelEn,
+                descriptionRu, descriptionEn, orderIndex, status, effectiveFrom, effectiveTo);
         validateCells(t, cells);
         jdbi.useHandle(h -> upsertDraft(h, t, versionId, cells));
     }
@@ -207,7 +216,9 @@ public final class RelationalStoreService {
                         """
                         SELECT key_parts::text   AS key_parts_json,
                                attributes::text  AS attributes_json,
-                               label_ru, label_en, status,
+                               parent_key::text  AS parent_key_json,
+                               label_ru, label_en, description_ru, description_en,
+                               order_index::text AS order_index, status,
                                effective_from::text AS effective_from,
                                effective_to::text   AS effective_to
                           FROM authoring.code_item
@@ -218,8 +229,12 @@ public final class RelationalStoreService {
                 .map((rs, ctx) -> new ItemRow(
                         rs.getString("key_parts_json"),
                         rs.getString("attributes_json"),
+                        rs.getString("parent_key_json"),
                         rs.getString("label_ru"),
                         rs.getString("label_en"),
+                        rs.getString("description_ru"),
+                        rs.getString("description_en"),
+                        rs.getString("order_index"),
                         rs.getString("status"),
                         rs.getString("effective_from"),
                         rs.getString("effective_to")))
@@ -475,8 +490,12 @@ public final class RelationalStoreService {
             ResolvedTable t,
             List<String> keyParts,
             Map<String, Object> attributes,
+            List<String> parentKey,
             String labelRu,
             String labelEn,
+            String descriptionRu,
+            String descriptionEn,
+            Integer orderIndex,
             String status,
             String effectiveFrom,
             String effectiveTo) {
@@ -488,8 +507,13 @@ public final class RelationalStoreService {
                 }
             });
         }
+        // parent_key — jsonb-массив (coerce сериализует List в JSON-текст).
+        putIfNotNull(cells, "parent_key", parentKey);
         putIfNotNull(cells, "label_ru", labelRu);
         putIfNotNull(cells, "label_en", labelEn);
+        putIfNotNull(cells, "description_ru", descriptionRu);
+        putIfNotNull(cells, "description_en", descriptionEn);
+        putIfNotNull(cells, "order_index", orderIndex);
         putIfNotNull(cells, "status", status);
         putIfNotNull(cells, "effective_from", effectiveFrom);
         putIfNotNull(cells, "effective_to", effectiveTo);
@@ -533,8 +557,12 @@ public final class RelationalStoreService {
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new IllegalStateException("cannot parse code_item json", e);
         }
+        putIfNotNull(cells, "parent_key", item.parentKeyJson());
         putIfNotNull(cells, "label_ru", item.labelRu());
         putIfNotNull(cells, "label_en", item.labelEn());
+        putIfNotNull(cells, "description_ru", item.descriptionRu());
+        putIfNotNull(cells, "description_en", item.descriptionEn());
+        putIfNotNull(cells, "order_index", item.orderIndex());
         putIfNotNull(cells, "status", item.status());
         putIfNotNull(cells, "effective_from", item.effectiveFrom());
         putIfNotNull(cells, "effective_to", item.effectiveTo());
@@ -589,8 +617,12 @@ public final class RelationalStoreService {
     private record ItemRow(
             String keyPartsJson,
             String attributesJson,
+            String parentKeyJson,
             String labelRu,
             String labelEn,
+            String descriptionRu,
+            String descriptionEn,
+            String orderIndex,
             String status,
             String effectiveFrom,
             String effectiveTo) {}

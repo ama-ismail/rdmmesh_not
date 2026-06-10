@@ -671,8 +671,12 @@ public final class AuthoringService {
                 versionId,
                 dto.keyParts(),
                 dto.attributes(),
+                dto.parentKey(),
                 dto.labelRu(),
                 dto.labelEn(),
+                dto.descriptionRu(),
+                dto.descriptionEn(),
+                dto.orderIndex(),
                 dto.status(),
                 dto.effectiveFrom(),
                 dto.effectiveTo()));

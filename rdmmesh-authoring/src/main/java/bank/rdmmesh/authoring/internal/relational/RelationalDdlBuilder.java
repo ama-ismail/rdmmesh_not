@@ -32,10 +32,18 @@ public final class RelationalDdlBuilder {
     /** Колонка version_id draft-таблицы (часть PK черновика). */
     public static final Column VERSION_ID = new Column("version_id", "uuid", true);
 
-    /** Стандартные колонки, которые есть у каждой материализованной таблицы. */
+    /**
+     * Стандартные колонки, которые есть у каждой материализованной таблицы. {@code parent_key}
+     * хранится как {@code jsonb}-массив key-part'ов (без FK на себя — это Stage 4/6);
+     * {@code order_index} — для детерминированной сортировки на read-path (Stage 3).
+     */
     private static final List<Column> STANDARD = List.of(
             new Column("label_ru", "text", false),
             new Column("label_en", "text", false),
+            new Column("description_ru", "text", false),
+            new Column("description_en", "text", false),
+            new Column("parent_key", "jsonb", false),
+            new Column("order_index", "integer", false),
             new Column("status", "text", true, "'ACTIVE'"),
             new Column("effective_from", "date", false),
             new Column("effective_to", "date", false));
@@ -145,6 +153,33 @@ public final class RelationalDdlBuilder {
             sb.append(q(pkColumns.get(i)));
         }
         sb.append(")\n)");
+        return sb.toString();
+    }
+
+    /**
+     * Идемпотентная эволюция схемы (Stage 4-lite): {@code ALTER TABLE ... ADD COLUMN IF NOT
+     * EXISTS} для каждой переданной колонки. {@code NOT NULL} при ALTER не навешиваем — на
+     * непустой таблице добавление NOT-NULL-колонки без дефолта упадёт; целостность ключей
+     * гарантирует исходный {@code CREATE}. {@code DEFAULT} переносим (нужен, напр., status).
+     * Уже существующие колонки (ключи, ранее созданные) пропускаются {@code IF NOT EXISTS}.
+     */
+    public static String addColumnsIfNotExists(String schema, String table, List<Column> columns) {
+        require(isValidIdentifier(schema), "schema: " + schema);
+        require(TABLE_IDENT.matcher(table).matches(), "table name invalid/too long: " + table);
+        require(columns != null && !columns.isEmpty(), "at least one column required");
+        StringBuilder sb = new StringBuilder("ALTER TABLE ")
+                .append(q(schema)).append('.').append(q(table)).append(' ');
+        for (int i = 0; i < columns.size(); i++) {
+            Column c = columns.get(i);
+            validateColumn(c);
+            if (i > 0) {
+                sb.append(", ");
+            }
+            sb.append("ADD COLUMN IF NOT EXISTS ").append(q(c.name())).append(' ').append(c.sqlType());
+            if (c.defaultExpr() != null) {
+                sb.append(" DEFAULT ").append(c.defaultExpr());
+            }
+        }
         return sb.toString();
     }
 

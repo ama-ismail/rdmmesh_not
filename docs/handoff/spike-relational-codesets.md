@@ -84,8 +84,22 @@ CREATE TABLE rd_data."<base>__current" ( /* те же колонки без vers
 остаётся источником истины и на publish'е заново «кормит» relational через `syncFromVersion`,
 поэтому любое расхождение live-зеркала самоисцеляется на publish'е.
 
-**Чего сознательно НЕ делает зеркало (Stage 4):** `parent_key`/`parent_ref`/`order_index`/
-`description_*` — в `__draft`/`__current` только key + attrs + `label_*`/`status`/`effective_*`.
+## Что сделано (Stage 4-lite — недостающие колонки под read-path)
+
+Перед read-path'ом (Stage 3) дорастили обе таблицы недостающими полями `code_item`:
+
+- `RelationalDdlBuilder.STANDARD` += `description_ru`/`description_en` (text),
+  `parent_key` (**jsonb**-массив key-part'ов, без self-FK — это Stage 6), `order_index` (integer).
+- `RelationalDdlBuilder.addColumnsIfNotExists` — идемпотентный `ALTER TABLE … ADD COLUMN
+  IF NOT EXISTS` (без NOT NULL — упал бы на непустой таблице; DEFAULT переносится).
+  `provision` зовёт его для обеих таблиц → эволюция схемы без ручного drop.
+- `RelationalStoreService`: `syncFromVersion`-SELECT + `ItemRow` + `toCells` и
+  `mirrorUpsertItem`/`itemCells` тянут новые поля; `AuthoringService.mirrorUpsert` отдаёт их из DTO.
+- `publish` (INSERT…SELECT по `dataColumns`) подхватывает новые колонки без правок.
+
+Чего пока НЕТ (остаётся в Stage 4-full): bitemporal `system_from`/`system_to`, closure/
+cycle-detection, `parent_ref`, per-row `content_hash`. `__current` по-прежнему = один
+последний PUBLISHED-снапшот (без произвольных semver/`knowledge_as_of`).
 
 ## Как потрогать
 

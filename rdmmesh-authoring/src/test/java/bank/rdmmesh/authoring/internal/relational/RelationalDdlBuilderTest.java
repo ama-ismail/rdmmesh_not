@@ -144,4 +144,33 @@ class RelationalDdlBuilderTest {
         assertThat(data.stream().anyMatch(c -> c.name().equals("label_ru"))).isTrue();
         assertThat(data.stream().anyMatch(c -> c.name().equals("effective_from"))).isTrue();
     }
+
+    // ── Stage 4-lite: новые стандартные колонки + эволюция схемы ──────────────────
+
+    @Test
+    void with_standard_includes_stage4lite_columns() {
+        List<Column> data = RelationalDdlBuilder.withStandard(List.of(new Column("code", "text", true)));
+        assertThat(data.stream().anyMatch(c -> c.name().equals("description_ru"))).isTrue();
+        assertThat(data.stream().anyMatch(c -> c.name().equals("description_en"))).isTrue();
+        assertThat(data.stream().anyMatch(c -> c.name().equals("order_index"))).isTrue();
+        Column parentKey = data.stream().filter(c -> c.name().equals("parent_key")).findFirst().orElseThrow();
+        assertThat(parentKey.sqlType()).isEqualTo("jsonb");
+    }
+
+    @Test
+    void add_columns_if_not_exists_renders_idempotent_alter() {
+        String sql = RelationalDdlBuilder.addColumnsIfNotExists(
+                "rd_data",
+                "d__c__current",
+                List.of(
+                        new Column("code", "text", true),
+                        new Column("order_index", "integer", false),
+                        new Column("status", "text", true, "'ACTIVE'")));
+        assertThat(sql).startsWith("ALTER TABLE \"rd_data\".\"d__c__current\" ");
+        assertThat(sql).contains("ADD COLUMN IF NOT EXISTS \"code\" text");
+        assertThat(sql).contains("ADD COLUMN IF NOT EXISTS \"order_index\" integer");
+        // DEFAULT переносится, NOT NULL при ALTER — нет (упал бы на непустой таблице)
+        assertThat(sql).contains("ADD COLUMN IF NOT EXISTS \"status\" text DEFAULT 'ACTIVE'");
+        assertThat(sql).doesNotContain("NOT NULL");
+    }
 }
