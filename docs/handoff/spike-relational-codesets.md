@@ -287,11 +287,18 @@ PUBLISHED-снапшот (`__current` перезатирается на publish'
   canonicalSnapshotBytes` берёт строки версии из `__draft` (publishing читает их до
   publish-CAS) и хэширует тем же `CanonicalSnapshot` → `content_hash` сохраняется.
   `onVersionPublished` больше не зовёт `syncFromVersion` (draft уже источник).
-- **7e — миграция drop jsonb + снос generic-пути** ⏸ НЕ СДЕЛАНО, **gated на зелёном CI**:
-  drop jsonb-колонок/индексов `code_item`/`code_set_schema`, снос `code_item_closure`,
-  удаление мёртвого code_item-кода (DAO, `cloneItems`, mirror-helpers). **Необратимо**;
-  write/read flip (7c/7d) локально не проверен (нет Testcontainers ITs) — дропать старый
-  стор до подтверждения боевой работы `rd_data` в CI нельзя (не будет отката).
+- **7e — drop jsonb + снос generic-пути** ✅ КОД ГОТОВ (⚠️ **мерджить только после зелёного CI**):
+  - Миграция `V025__drop_code_item_generic_path.sql`: `DROP TABLE code_item, code_item_closure`
+    (CASCADE) + осиротевшие trigger-функции closure/cycle (V022/V023). `code_set_schema.json_schema`
+    НЕ трогаем (вывод колонок rd_data + валидация attributes).
+  - Java: удалены `ClosureAdminResource` (+ wiring, `rebuildClosure`), `CodeItemClosureDao`,
+    `CodeItemDao`, `AuthoringMappers.toItem`; в `RelationalStoreService` убраны `syncFromVersion`/
+    `toCells`/`ItemRow`/`SyncResult`/`mirror*` + `/sync` endpoint; в `AuthoringService` — мёртвый
+    code_item-код; в `DistributionDao` — item-методы.
+  - Оставлены мёртвыми (types-only, не вызываются): `CodeItemDiffDao` + `DiffCalculator`
+    (нужны типы `Result/Entry/Summary` + их тест; ссылаются на ф-цию `code_item_diff_base`).
+  - **Необратимо**: `V025` применится Flyway на старте. Локально вся сборка (8 модулей) зелёная,
+    но rd_data-путь проверяют только Testcontainers ITs в CI — drop безопасен лишь после зелёного CI.
 
 ## Риски / открытые вопросы
 
