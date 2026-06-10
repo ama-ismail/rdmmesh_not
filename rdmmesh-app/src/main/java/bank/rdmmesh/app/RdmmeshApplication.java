@@ -229,8 +229,13 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         // E8 — Distribution. Read-only consumer-API:
         //   GET /rdm/{domain}/{codeset}/{items|lookup|export}
         // ArchUnit-gates запрещают этому модулю любые DB writes.
+        // Stage 7b: items читаются из rd_data через RelationalReadPort (не jsonb code_item).
         environment.jersey().register(
-                DistributionModule.buildResource(jdbi, environment.getObjectMapper()));
+                DistributionModule.buildResource(
+                        jdbi,
+                        environment.getObjectMapper(),
+                        AuthoringModule.buildRelationalReadPort(
+                                jdbi, catalogReadPort, environment.getObjectMapper())));
 
         environment.jersey().register(new AuthResource());
 

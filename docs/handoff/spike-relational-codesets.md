@@ -267,9 +267,14 @@ PUBLISHED-снапшот (`__current` перезатирается на publish'
 
 ### Дальше по Stage 7 (порядок)
 
-- **7b** — distribution читает из `rd_data`: `DistributionService` резолвит версию как
-  сейчас (semver/`knowledge_as_of` по `code_set_version`), но items берёт из `__history`
-  (по version_id) / `__current` (latest). Нужна выгрузка/lookup/пагинация на колонках.
+- **7b — distribution читает items из `rd_data`** ✅ СДЕЛАНО: порт `RelationalReadPort`
+  (api) + `RelationalReadAdapter` (authoring, поверх `listPublishedItems` из `__history`),
+  wired в app через `AuthoringModule.buildRelationalReadPort`. `DistributionService`
+  резолвит версию/кодсет как прежде (catalog + `code_set_version` — не jsonb), а items
+  берёт из порта; фильтр `as_of` (effective) + пагинация + lookup — in-memory (пилотные
+  объёмы). DAO-методы чтения items из `code_item` больше не вызываются (удалим в 7e).
+  Pure-тест `DistributionServiceTest.effectiveAt`. NB: версии, опубликованные до Stage 7a,
+  в `__history` отсутствуют — нужен re-publish/backfill (transition gap).
 - **7c** — write-flip: `AuthoringService` пишет ТОЛЬКО в `__draft` (relational — source of
   truth), `code_item` больше не ведущий; closure/diff/publish уже на rd_data.
 - **7d** — publishing canonical/`content_hash` из `rd_data` (общий `CanonicalSnapshot` уже

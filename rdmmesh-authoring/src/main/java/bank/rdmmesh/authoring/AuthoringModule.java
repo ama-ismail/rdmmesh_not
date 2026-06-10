@@ -6,8 +6,10 @@ import org.jdbi.v3.core.Jdbi;
 import bank.rdmmesh.api.eventbus.EventBus;
 import bank.rdmmesh.api.port.CatalogReadPort;
 import bank.rdmmesh.api.port.PublishedSnapshotPort;
+import bank.rdmmesh.api.port.RelationalReadPort;
 import bank.rdmmesh.api.port.VersionLifecyclePort;
 import bank.rdmmesh.authoring.internal.PublishedSnapshotAdapter;
+import bank.rdmmesh.authoring.internal.RelationalReadAdapter;
 import bank.rdmmesh.authoring.internal.VersionLifecycleAdapter;
 import bank.rdmmesh.authoring.internal.relational.RelationalStoreService;
 import bank.rdmmesh.authoring.internal.service.AuthoringService;
@@ -55,6 +57,12 @@ public final class AuthoringModule {
     /** Read-side порт canonical snapshot bytes для publishing (E6). */
     public static PublishedSnapshotPort buildSnapshotPort(Jdbi jdbi) {
         return new PublishedSnapshotAdapter(jdbi);
+    }
+
+    /** Read-side порт реляционного стора (rd_data) для distribution (Stage 7b). */
+    public static RelationalReadPort buildRelationalReadPort(
+            Jdbi jdbi, CatalogReadPort catalog, ObjectMapper json) {
+        return new RelationalReadAdapter(new RelationalStoreService(jdbi, catalog, json));
     }
 
     public record Resources(
