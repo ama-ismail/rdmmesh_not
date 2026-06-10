@@ -170,109 +170,6 @@ public final class RelationalStoreService {
         });
     }
 
-    // ── live draft mirror (Stage 2-final, вызывается из AuthoringService) ──────────
-
-    /**
-     * Зеркалирует upsert одного item'а в {@code __draft}. Ключи берутся позиционно из
-     * {@code keyParts} (порядок = key_spec.parts). Лениво материализует таблицы, если
-     * справочник ещё не provisioned. Вызывается best-effort из {@code AuthoringService}
-     * после успешной записи в {@code code_item}.
-     */
-    public void mirrorUpsertItem(
-            UUID versionId,
-            List<String> keyParts,
-            Map<String, Object> attributes,
-            List<String> parentKey,
-            Map<String, Object> parentRef,
-            String labelRu,
-            String labelEn,
-            String descriptionRu,
-            String descriptionEn,
-            Integer orderIndex,
-            String status,
-            String effectiveFrom,
-            String effectiveTo,
-            String systemFrom,
-            String systemTo) {
-        ResolvedTable t = ensureProvisioned(codesetIdOf(versionId));
-        Map<String, Object> cells = itemCells(
-                t, keyParts, attributes, parentKey, parentRef, labelRu, labelEn,
-                descriptionRu, descriptionEn, orderIndex, status, effectiveFrom, effectiveTo,
-                systemFrom, systemTo);
-        validateCells(t, cells);
-        jdbi.useHandle(h -> upsertDraft(h, t, versionId, cells));
-    }
-
-    /** Зеркалирует удаление item'а из {@code __draft} по ключу (позиционно из keyParts). */
-    public void mirrorDeleteItem(UUID versionId, List<String> keyParts) {
-        ResolvedTable t = ensureProvisioned(codesetIdOf(versionId));
-        deleteDraftRow(versionId, keyCellsOf(t, keyParts));
-    }
-
-    /** Зеркалирует bulk-clear: удаляет все строки черновика версии из {@code __draft}. */
-    public void mirrorClearDraft(UUID versionId) {
-        ResolvedTable t = ensureProvisioned(codesetIdOf(versionId));
-        jdbi.useHandle(h -> h.createUpdate(
-                        "DELETE FROM " + qTable(t.draftTable) + " WHERE version_id = CAST(:v AS uuid)")
-                .bind("v", versionId)
-                .execute());
-    }
-
-    /**
-     * Бэкфилл: читает все CodeItem'ы версии из {@code authoring.code_item} и заливает их
-     * в {@code __draft} «ячейка за ячейкой». Идемпотентно (upsert по {@code (version_id,ключи)}).
-     */
-    public SyncResult syncFromVersion(UUID versionId) {
-        UUID codesetId = codesetIdOf(versionId);
-        provision(codesetId); // idempotent
-        ResolvedTable t = resolve(codesetId);
-
-        List<ItemRow> items = jdbi.withHandle(h -> h.createQuery(
-                        """
-                        SELECT key_parts::text   AS key_parts_json,
-                               attributes::text  AS attributes_json,
-                               parent_key::text  AS parent_key_json,
-                               parent_ref::text  AS parent_ref_json,
-                               label_ru, label_en, description_ru, description_en,
-                               order_index::text AS order_index, status,
-                               effective_from::text AS effective_from,
-                               effective_to::text   AS effective_to,
-                               system_from::text    AS system_from,
-                               system_to::text      AS system_to
-                          FROM authoring.code_item
-                         WHERE version_id = :v
-                         ORDER BY order_index, id
-                        """)
-                .bind("v", versionId)
-                .map((rs, ctx) -> new ItemRow(
-                        rs.getString("key_parts_json"),
-                        rs.getString("attributes_json"),
-                        rs.getString("parent_key_json"),
-                        rs.getString("parent_ref_json"),
-                        rs.getString("label_ru"),
-                        rs.getString("label_en"),
-                        rs.getString("description_ru"),
-                        rs.getString("description_en"),
-                        rs.getString("order_index"),
-                        rs.getString("status"),
-                        rs.getString("effective_from"),
-                        rs.getString("effective_to"),
-                        rs.getString("system_from"),
-                        rs.getString("system_to")))
-                .list());
-
-        int[] loaded = {0};
-        jdbi.useHandle(h -> {
-            for (ItemRow item : items) {
-                Map<String, Object> cells = toCells(t, item);
-                validateCells(t, cells);
-                upsertDraft(h, t, versionId, cells);
-                loaded[0]++;
-            }
-        });
-        log.info("relational store: sync version_id={} → {}: {} строк", versionId, t.draftTable, loaded[0]);
-        return new SyncResult(codesetId, t.draftTable, loaded[0]);
-    }
 
     // ── publish ───────────────────────────────────────────────────────────────
 
@@ -1247,57 +1144,10 @@ public final class RelationalStoreService {
         return cells;
     }
 
-    /** CodeItem-строка (jsonb key_parts/attributes) → map колонка→значение. */
-    private Map<String, Object> toCells(ResolvedTable t, ItemRow item) {
-        Map<String, Object> cells = new LinkedHashMap<>();
-        try {
-            JsonNode keyParts = json.readTree(item.keyPartsJson());
-            if (!keyParts.isArray() || keyParts.size() != t.keyNames.size()) {
-                throw new IllegalStateException(
-                        "key_parts arity " + keyParts.size() + " != key columns " + t.keyNames.size());
-            }
-            for (int i = 0; i < t.keyNames.size(); i++) {
-                cells.put(t.keyNames.get(i), jsonToJava(keyParts.get(i)));
-            }
-            if (item.attributesJson() != null && !item.attributesJson().isBlank()) {
-                JsonNode attrs = json.readTree(item.attributesJson());
-                attrs.fields().forEachRemaining(en -> {
-                    if (t.columnTypes.containsKey(en.getKey()) && !t.keyNames.contains(en.getKey())) {
-                        cells.put(en.getKey(), jsonToJava(en.getValue()));
-                    }
-                });
-            }
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new IllegalStateException("cannot parse code_item json", e);
-        }
-        putIfNotNull(cells, "parent_key", item.parentKeyJson());
-        putIfNotNull(cells, "parent_ref", item.parentRefJson());
-        putIfNotNull(cells, "label_ru", item.labelRu());
-        putIfNotNull(cells, "label_en", item.labelEn());
-        putIfNotNull(cells, "description_ru", item.descriptionRu());
-        putIfNotNull(cells, "description_en", item.descriptionEn());
-        putIfNotNull(cells, "order_index", item.orderIndex());
-        putIfNotNull(cells, "status", item.status());
-        putIfNotNull(cells, "effective_from", item.effectiveFrom());
-        putIfNotNull(cells, "effective_to", item.effectiveTo());
-        putIfNotNull(cells, "system_from", item.systemFrom());
-        putIfNotNull(cells, "system_to", item.systemTo());
-        return cells;
-    }
-
     private static void putIfNotNull(Map<String, Object> cells, String key, Object value) {
         if (value != null) {
             cells.put(key, value);
         }
-    }
-
-    private static Object jsonToJava(JsonNode n) {
-        if (n == null || n.isNull()) return null;
-        if (n.isTextual()) return n.asText();
-        if (n.isBoolean()) return n.asBoolean();
-        if (n.isIntegralNumber()) return n.asLong();
-        if (n.isNumber()) return n.asDouble();
-        return n.toString();
     }
 
     /** jsonb-колонки сериализуем в JSON-текст; остальное — как есть. */
@@ -1328,8 +1178,6 @@ public final class RelationalStoreService {
             String schema, String draftTable, String currentTable, String historyTable,
             List<String> columns) {}
 
-    public record SyncResult(UUID codesetId, String draftTable, int rowsLoaded) {}
-
     public record PublishResult(UUID codesetId, String currentTable, int rowsPublished) {}
 
     /** Пара closure-иерархии: предок → потомок на расстоянии {@code depth} рёбер. */
@@ -1351,19 +1199,4 @@ public final class RelationalStoreService {
     /** Результат материализации FK справочника. */
     public record ForeignKeyReport(List<AppliedFk> applied, List<SkippedFk> skipped) {}
 
-    private record ItemRow(
-            String keyPartsJson,
-            String attributesJson,
-            String parentKeyJson,
-            String parentRefJson,
-            String labelRu,
-            String labelEn,
-            String descriptionRu,
-            String descriptionEn,
-            String orderIndex,
-            String status,
-            String effectiveFrom,
-            String effectiveTo,
-            String systemFrom,
-            String systemTo) {}
 }

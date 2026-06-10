@@ -24,7 +24,6 @@ import bank.rdmmesh.api.security.RdmmeshPrincipal;
 import bank.rdmmesh.authoring.internal.relational.RelationalStoreService;
 import bank.rdmmesh.authoring.internal.relational.RelationalStoreService.ProvisionResult;
 import bank.rdmmesh.authoring.internal.relational.RelationalStoreService.PublishResult;
-import bank.rdmmesh.authoring.internal.relational.RelationalStoreService.SyncResult;
 
 import io.dropwizard.auth.Auth;
 
@@ -33,7 +32,6 @@ import io.dropwizard.auth.Auth;
  *
  * <ul>
  *   <li>{@code POST   /relational/codesets/{id}/provision}              — CREATE TABLE draft+current</li>
- *   <li>{@code POST   /relational/codesets/{id}/sync?version_id=}       — бэкфилл items версии в draft</li>
  *   <li>{@code POST   /relational/codesets/{id}/draft-rows?version_id=} — upsert строки черновика</li>
  *   <li>{@code DELETE /relational/codesets/{id}/draft-rows?version_id=} — удалить строку черновика по ключу</li>
  *   <li>{@code GET    /relational/codesets/{id}/draft-rows?version_id=} — строки черновика</li>
@@ -69,24 +67,6 @@ public final class RelationalCodeSetResource {
     public ProvisionResult provision(@Auth RdmmeshPrincipal principal, @PathParam("id") String id) {
         try {
             return store.provision(parseUuid(id));
-        } catch (IllegalArgumentException e) {
-            throw badRequest(e);
-        }
-    }
-
-    @POST
-    @Path("/sync")
-    @RolesAllowed({"RDM_AUTHOR", "RDM_SCHEMA_DESIGNER", "RDM_ADMIN"})
-    public SyncResult sync(
-            @Auth RdmmeshPrincipal principal,
-            @PathParam("id") String id,
-            @QueryParam("version_id") String versionId) {
-        UUID codesetId = parseUuid(id);
-        UUID vId = requireVersion(versionId);
-        try {
-            SyncResult result = store.syncFromVersion(vId);
-            assertBelongs(result.codesetId(), codesetId, versionId, id);
-            return result;
         } catch (IllegalArgumentException e) {
             throw badRequest(e);
         }

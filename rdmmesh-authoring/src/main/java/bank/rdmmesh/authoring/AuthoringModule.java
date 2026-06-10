@@ -13,7 +13,6 @@ import bank.rdmmesh.authoring.internal.RelationalReadAdapter;
 import bank.rdmmesh.authoring.internal.VersionLifecycleAdapter;
 import bank.rdmmesh.authoring.internal.relational.RelationalStoreService;
 import bank.rdmmesh.authoring.internal.service.AuthoringService;
-import bank.rdmmesh.authoring.resource.ClosureAdminResource;
 import bank.rdmmesh.authoring.resource.CodeItemResource;
 import bank.rdmmesh.authoring.resource.CodeSetVersionResource;
 import bank.rdmmesh.authoring.resource.RelationalCodeSetResource;
@@ -45,7 +44,6 @@ public final class AuthoringModule {
                 new CodeSetVersionResource(service),
                 new CodeItemResource(service),
                 new VersionDiffResource(service),
-                new ClosureAdminResource(service, eventBus),
                 new RelationalCodeSetResource(relationalStore));
     }
 
@@ -71,6 +69,5 @@ public final class AuthoringModule {
             CodeSetVersionResource versions,
             CodeItemResource items,
             VersionDiffResource diff,
-            ClosureAdminResource closureAdmin,
             RelationalCodeSetResource relational) {}
 }

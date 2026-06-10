@@ -155,7 +155,6 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         environment.jersey().register(authoring.versions());
         environment.jersey().register(authoring.items());
         environment.jersey().register(authoring.diff());
-        environment.jersey().register(authoring.closureAdmin());
         environment.jersey().register(authoring.relational());
 
         // E5 — Workflow. Lifecycle-write идёт через authoring (SPEC §3.3),

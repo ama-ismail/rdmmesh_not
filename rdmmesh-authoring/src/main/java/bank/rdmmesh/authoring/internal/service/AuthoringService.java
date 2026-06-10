@@ -13,9 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
-import org.jdbi.v3.core.statement.UnableToExecuteStatementException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,10 +27,6 @@ import bank.rdmmesh.api.port.CatalogReadPort.CodeSetSnapshot;
 import bank.rdmmesh.authoring.internal.AuthoringMappers;
 import bank.rdmmesh.authoring.internal.SemVer;
 import bank.rdmmesh.authoring.internal.csv.CsvBulkParser;
-import bank.rdmmesh.authoring.internal.dao.CodeItemClosureDao;
-import bank.rdmmesh.authoring.internal.dao.CodeItemDao;
-import bank.rdmmesh.authoring.internal.dao.CodeItemDao.ItemRow;
-import bank.rdmmesh.authoring.internal.dao.CodeItemDiffDao;
 import bank.rdmmesh.authoring.internal.dao.CodeSetVersionDao;
 import bank.rdmmesh.authoring.internal.dao.CodeSetVersionDao.VersionRow;
 import bank.rdmmesh.authoring.internal.diff.DiffCalculator;
@@ -72,7 +66,6 @@ public final class AuthoringService {
     private final CatalogReadPort catalog;
     private final ObjectMapper json;
     private final AttributesValidator validator;
-    private final DiffCalculator differ;
     private final CsvBulkParser csv;
     private final XlsxBulkParser xlsx;
     private final EventBus eventBus;
@@ -100,7 +93,6 @@ public final class AuthoringService {
         this.catalog = catalog;
         this.json = json;
         this.validator = new AttributesValidator(json);
-        this.differ = new DiffCalculator(json);
         this.csv = new CsvBulkParser(json);
         this.xlsx = new XlsxBulkParser(json);
         this.eventBus = eventBus;
@@ -215,38 +207,6 @@ public final class AuthoringService {
         return deleted;
     }
 
-    /**
-     * Disaster-recovery: пересобрать closure-table для указанной версии. В обычной
-     * работе обслуживание идёт триггерами (V022/V023); вызов нужен после ручных
-     * SQL-вмешательств либо когда V023 sanity check выдал WARN на старте.
-     *
-     * <p>В одной транзакции: {@code DELETE all closure-rows for versionId} +
-     * {@code WITH RECURSIVE} rebuild через actual {@code code_item}. Триггеры на
-     * {@code code_item} не дёргаются (мы не трогаем эту таблицу).
-     *
-     * @throws IllegalArgumentException если версии нет
-     */
-    public ClosureRebuildResult rebuildClosure(UUID versionId, UUID admin) {
-        return jdbi.inTransaction(handle -> {
-            VersionRow version = handle.attach(CodeSetVersionDao.class)
-                    .findById(versionId)
-                    .orElseThrow(() -> new IllegalArgumentException("Version not found: " + versionId));
-            CodeItemClosureDao dao = handle.attach(CodeItemClosureDao.class);
-            int removed = dao.deleteAllForVersion(versionId);
-            int inserted = dao.rebuild(versionId);
-            int total = dao.countForVersion(versionId);
-            log.warn(
-                    "authoring: closure rebuild version_id={} (status={}) removed={} inserted={} total={} by_admin={}",
-                    versionId,
-                    version.status(),
-                    removed,
-                    inserted,
-                    total,
-                    admin);
-            return new ClosureRebuildResult(versionId, removed, inserted, total);
-        });
-    }
-
     // ── Items ───────────────────────────────────────────────────────────────────
 
     public ItemsPage listItems(UUID versionId, int page, int size) {
@@ -335,12 +295,8 @@ public final class AuthoringService {
 
     /**
      * E21 — bulk-delete всех items в DRAFT. Используется UI-кнопкой «Очистить
-     * все записи» перед повторным bulk-import'ом. Closure-table вычищается
-     * row-by-row AFTER-DELETE триггером (V022); {@code item_count} сбрасывается
-     * в 0 в той же транзакции.
-     *
-     * <p>DRAFT-проверка двойная: service ({@link #loadDraftContext}) и DAO
-     * (EXISTS-clause в {@link CodeItemDao#deleteAllInDraft}).
+     * все записи» перед повторным bulk-import'ом. Stage 7c: чистит {@code rd_data."<base>__draft"}
+     * версии; {@code item_count} сбрасывается в 0.
      *
      * @return количество удалённых items (0 если версия уже была пуста)
      * @throws IllegalArgumentException если версии нет
@@ -576,86 +532,8 @@ public final class AuthoringService {
         }
     }
 
-    private int cloneItems(Handle handle, UUID fromVersionId, UUID toVersionId) {
-        // Atomic SELECT-INSERT: новые id, new system_from, row_version=0; всё остальное — копия.
-        return handle.createUpdate(
-                        """
-                INSERT INTO authoring.code_item
-                    (id, version_id, key_parts, parent_key, parent_ref,
-                     label_ru, label_en, description_ru, description_en,
-                     attributes, order_index, status, effective_from, effective_to,
-                     row_version)
-                SELECT gen_random_uuid(), :toVersion, key_parts, parent_key, parent_ref,
-                       label_ru, label_en, description_ru, description_en,
-                       attributes, order_index, status, effective_from, effective_to,
-                       0
-                  FROM authoring.code_item
-                 WHERE version_id = :fromVersion
-                """)
-                .bind("toVersion", toVersionId)
-                .bind("fromVersion", fromVersionId)
-                .execute();
-    }
-
-    private static String jsonOf(List<String> list) {
-        return AuthoringMappers.writeJson(list);
-    }
-
-    private static String jsonOfNullable(Object value) {
-        if (value == null) return null;
-        return AuthoringMappers.writeJson(value);
-    }
-
     private static String keyDescription(List<String> key) {
         return key == null ? "<no-key>" : String.join("|", key);
-    }
-
-    private static boolean isUniqueViolation(UnableToExecuteStatementException e) {
-        if (e.getCause() instanceof java.sql.SQLException sql) {
-            // Postgres SQLState для unique_violation.
-            return "23505".equals(sql.getSQLState());
-        }
-        return false;
-    }
-
-    // ── relational mirror (Stage 2-final) ─────────────────────────────────────────
-
-    /** Зеркалирует финальное состояние item'а (из готового DTO) в {@code __draft}. */
-    private void mirrorUpsert(UUID versionId, CodeItemDto dto) {
-        mirror("upsert", versionId, () -> relationalStore.mirrorUpsertItem(
-                versionId,
-                dto.keyParts(),
-                dto.attributes(),
-                dto.parentKey(),
-                dto.parentRef(),
-                dto.labelRu(),
-                dto.labelEn(),
-                dto.descriptionRu(),
-                dto.descriptionEn(),
-                dto.orderIndex(),
-                dto.status(),
-                dto.effectiveFrom(),
-                dto.effectiveTo(),
-                dto.systemFrom(),
-                dto.systemTo()));
-    }
-
-    /**
-     * Best-effort обёртка для relational-зеркала (Stage 2-final). {@code code_item} уже
-     * закоммичен — сбой зеркала не должен ронять основную операцию; зеркало heal'ится на
-     * следующей записи / publish'е. Отдельная Postgres-tx внутри store'а (см.
-     * {@code RelationalStoreService}). No-op, если relational store не сконфигурирован.
-     */
-    private void mirror(String op, UUID versionId, Runnable action) {
-        if (relationalStore == null) {
-            return;
-        }
-        try {
-            action.run();
-        } catch (RuntimeException e) {
-            log.warn("authoring: relational mirror {} version_id={} не удалось (best-effort): {}",
-                    op, versionId, e.toString());
-        }
     }
 
     // ── DTO ─────────────────────────────────────────────────────────────────────
@@ -718,12 +596,6 @@ public final class AuthoringService {
 
     public record BulkError(int rowIndex, List<String> keyParts, String field, String message) {}
 
-    /** Результат disaster-recovery closure rebuild'а. */
-    public record ClosureRebuildResult(UUID versionId, int removed, int inserted, int total) {}
-
-    /** Внутр. результат {@link #deleteItem}: удалили ли строку и её keyParts (для зеркала). */
-    private record Deleted(boolean deleted, List<String> keyParts) {}
-
     private record VersionContext(UUID codesetId, int schemaVersion, String schemaText) {}
 
     /** Конфликт optimistic-lock'а — service бросает, resource ловит и отдаёт 409. */
@@ -740,7 +612,4 @@ public final class AuthoringService {
         }
     }
 
-    private Map<String, Object> safeAttributes(Map<String, Object> attrs) {
-        return attrs == null ? new LinkedHashMap<>() : new LinkedHashMap<>(attrs);
-    }
 }
