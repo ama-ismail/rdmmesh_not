@@ -30,8 +30,14 @@ public final class AuthoringModule {
 
     public static Resources build(
             Jdbi jdbi, CatalogReadPort catalog, ObjectMapper json, EventBus eventBus) {
-        AuthoringService service = new AuthoringService(jdbi, catalog, json, eventBus);
         RelationalStoreService relationalStore = new RelationalStoreService(jdbi, catalog, json);
+        // Stage 2-final: relational store пересобирает __current после publish'а (E6) —
+        // подписка на VersionPublishedDomainEvent на том же in-process bus, что и publishing.
+        if (eventBus != null) {
+            relationalStore.registerOn(eventBus);
+        }
+        AuthoringService service =
+                new AuthoringService(jdbi, catalog, json, eventBus, relationalStore);
         return new Resources(
                 service,
                 new CodeSetVersionResource(service),

@@ -36,6 +36,7 @@ import bank.rdmmesh.authoring.internal.dao.CodeItemDiffDao;
 import bank.rdmmesh.authoring.internal.dao.CodeSetVersionDao;
 import bank.rdmmesh.authoring.internal.dao.CodeSetVersionDao.VersionRow;
 import bank.rdmmesh.authoring.internal.diff.DiffCalculator;
+import bank.rdmmesh.authoring.internal.relational.RelationalStoreService;
 import bank.rdmmesh.authoring.internal.validation.AttributesValidator;
 import bank.rdmmesh.authoring.internal.xlsx.MatrixPivotSheetParser;
 import bank.rdmmesh.authoring.internal.xlsx.XlsxBulkParser;
@@ -76,12 +77,25 @@ public final class AuthoringService {
     private final XlsxBulkParser xlsx;
     private final EventBus eventBus;
 
+    /**
+     * Relational store (Stage 2-final, nullable). Когда задан — каждая mutation item'а
+     * best-effort зеркалируется в {@code rd_data."<base>__draft"} после успешной записи
+     * в {@code code_item}. {@code code_item} остаётся источником истины; зеркало — путь
+     * к тому, чтобы {@code __draft}/{@code __current} стали единственным стором (спайк).
+     */
+    private final RelationalStoreService relationalStore;
+
     public AuthoringService(Jdbi jdbi, CatalogReadPort catalog, ObjectMapper json) {
-        this(jdbi, catalog, json, null);
+        this(jdbi, catalog, json, null, null);
     }
 
     public AuthoringService(Jdbi jdbi, CatalogReadPort catalog, ObjectMapper json,
                             EventBus eventBus) {
+        this(jdbi, catalog, json, eventBus, null);
+    }
+
+    public AuthoringService(Jdbi jdbi, CatalogReadPort catalog, ObjectMapper json,
+                            EventBus eventBus, RelationalStoreService relationalStore) {
         this.jdbi = jdbi;
         this.catalog = catalog;
         this.json = json;
@@ -90,6 +104,7 @@ public final class AuthoringService {
         this.csv = new CsvBulkParser(json);
         this.xlsx = new XlsxBulkParser(json);
         this.eventBus = eventBus;
+        this.relationalStore = relationalStore;
     }
 
     // ── Versions ────────────────────────────────────────────────────────────────
@@ -259,7 +274,7 @@ public final class AuthoringService {
         VersionContext ctx = loadDraftContext(versionId);
         validateOrThrow(ctx, req.attributes(), keyDescription(req.keyParts()));
 
-        return jdbi.inTransaction(handle -> {
+        CodeItemDto created = jdbi.inTransaction(handle -> {
             CodeItemDao dao = handle.attach(CodeItemDao.class);
             UUID id = UUID.randomUUID();
             try {
@@ -292,6 +307,8 @@ public final class AuthoringService {
             log.debug("authoring: + item version_id={} key={} by={}", versionId, req.keyParts(), author);
             return AuthoringMappers.toItem(dao.findById(id).orElseThrow());
         });
+        mirrorUpsert(versionId, created);
+        return created;
     }
 
     public CodeItemDto updateItem(UUID versionId, UUID itemId, ItemPatch patch, UUID author) {
@@ -300,7 +317,7 @@ public final class AuthoringService {
             validateOrThrow(ctx, patch.attributes(), "id=" + itemId);
         }
 
-        return jdbi.inTransaction(handle -> {
+        CodeItemDto updated = jdbi.inTransaction(handle -> {
             CodeItemDao dao = handle.attach(CodeItemDao.class);
             ItemRow current = dao.findById(itemId)
                     .filter(r -> r.versionId().equals(versionId))
@@ -330,20 +347,31 @@ public final class AuthoringService {
             log.debug("authoring: ~ item version_id={} id={} by={}", versionId, itemId, author);
             return AuthoringMappers.toItem(dao.findById(itemId).orElseThrow());
         });
+        mirrorUpsert(versionId, updated);
+        return updated;
     }
 
     public boolean deleteItem(UUID versionId, UUID itemId, UUID author) {
         loadDraftContext(versionId); // только чтобы проверить, что это DRAFT
-        return jdbi.inTransaction(handle -> {
+        Deleted result = jdbi.inTransaction(handle -> {
             CodeItemDao dao = handle.attach(CodeItemDao.class);
+            // keyParts удаляемой строки нужны для зеркального DELETE в __draft.
+            List<String> keyParts = dao.findById(itemId)
+                    .filter(r -> r.versionId().equals(versionId))
+                    .map(r -> AuthoringMappers.toItem(r).keyParts())
+                    .orElse(null);
             int n = dao.deleteInDraft(itemId);
-            if (n == 0) return false;
+            if (n == 0) return new Deleted(false, null);
             // Closure обновляется AFTER-DELETE триггером (V022).
             int count = dao.countByVersion(versionId);
             handle.attach(CodeSetVersionDao.class).setItemCount(versionId, count);
             log.debug("authoring: - item version_id={} id={} by={}", versionId, itemId, author);
-            return true;
+            return new Deleted(true, keyParts);
         });
+        if (result.deleted() && result.keyParts() != null) {
+            mirror("delete", versionId, () -> relationalStore.mirrorDeleteItem(versionId, result.keyParts()));
+        }
+        return result.deleted();
     }
 
     /**
@@ -361,13 +389,15 @@ public final class AuthoringService {
      */
     public int clearAllItems(UUID versionId, UUID actor) {
         loadDraftContext(versionId);
-        return jdbi.inTransaction(handle -> {
+        int deleted = jdbi.inTransaction(handle -> {
             CodeItemDao dao = handle.attach(CodeItemDao.class);
-            int deleted = dao.deleteAllInDraft(versionId);
+            int n = dao.deleteAllInDraft(versionId);
             handle.attach(CodeSetVersionDao.class).setItemCount(versionId, 0);
-            log.info("authoring: clear-all items version_id={} deleted={} by={}", versionId, deleted, actor);
-            return deleted;
+            log.info("authoring: clear-all items version_id={} deleted={} by={}", versionId, n, actor);
+            return n;
         });
+        mirror("clear", versionId, () -> relationalStore.mirrorClearDraft(versionId));
+        return deleted;
     }
 
     // ── Bulk import ─────────────────────────────────────────────────────────────
@@ -394,7 +424,7 @@ public final class AuthoringService {
         if (!errors.isEmpty()) {
             return BulkResult.rejected(rows.size(), errors);
         }
-        return jdbi.inTransaction(handle -> {
+        BulkResult result = jdbi.inTransaction(handle -> {
             int added = 0, updated = 0, unchanged = 0;
             CodeItemDao dao = handle.attach(CodeItemDao.class);
             for (NewItem r : rows) {
@@ -448,6 +478,10 @@ public final class AuthoringService {
                     author);
             return BulkResult.applied(rows.size(), added, updated, unchanged);
         });
+        // Bulk — upsert-only (без удалений): re-sync всей версии корректно отражает
+        // итоговое состояние в __draft (idempotent, дешевле точечного зеркала на пачку).
+        mirror("bulk", versionId, () -> relationalStore.syncFromVersion(versionId));
+        return result;
     }
 
     public BulkResult bulkUpsertCsv(UUID versionId, InputStream csvIn, UUID author) {
@@ -629,6 +663,39 @@ public final class AuthoringService {
         return false;
     }
 
+    // ── relational mirror (Stage 2-final) ─────────────────────────────────────────
+
+    /** Зеркалирует финальное состояние item'а (из готового DTO) в {@code __draft}. */
+    private void mirrorUpsert(UUID versionId, CodeItemDto dto) {
+        mirror("upsert", versionId, () -> relationalStore.mirrorUpsertItem(
+                versionId,
+                dto.keyParts(),
+                dto.attributes(),
+                dto.labelRu(),
+                dto.labelEn(),
+                dto.status(),
+                dto.effectiveFrom(),
+                dto.effectiveTo()));
+    }
+
+    /**
+     * Best-effort обёртка для relational-зеркала (Stage 2-final). {@code code_item} уже
+     * закоммичен — сбой зеркала не должен ронять основную операцию; зеркало heal'ится на
+     * следующей записи / publish'е. Отдельная Postgres-tx внутри store'а (см.
+     * {@code RelationalStoreService}). No-op, если relational store не сконфигурирован.
+     */
+    private void mirror(String op, UUID versionId, Runnable action) {
+        if (relationalStore == null) {
+            return;
+        }
+        try {
+            action.run();
+        } catch (RuntimeException e) {
+            log.warn("authoring: relational mirror {} version_id={} не удалось (best-effort): {}",
+                    op, versionId, e.toString());
+        }
+    }
+
     // ── DTO ─────────────────────────────────────────────────────────────────────
 
     public record NewItem(
@@ -691,6 +758,9 @@ public final class AuthoringService {
 
     /** Результат disaster-recovery closure rebuild'а. */
     public record ClosureRebuildResult(UUID versionId, int removed, int inserted, int total) {}
+
+    /** Внутр. результат {@link #deleteItem}: удалили ли строку и её keyParts (для зеркала). */
+    private record Deleted(boolean deleted, List<String> keyParts) {}
 
     private record VersionContext(UUID codesetId, int schemaVersion, String schemaText) {}
 

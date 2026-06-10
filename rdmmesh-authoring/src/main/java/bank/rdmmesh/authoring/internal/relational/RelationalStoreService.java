@@ -14,6 +14,8 @@ import org.jdbi.v3.core.Jdbi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import bank.rdmmesh.api.eventbus.EventBus;
+import bank.rdmmesh.api.eventbus.VersionPublishedDomainEvent;
 import bank.rdmmesh.api.port.CatalogReadPort;
 import bank.rdmmesh.authoring.internal.dao.PhysicalTableRegistryDao;
 import bank.rdmmesh.authoring.internal.relational.RelationalDdlBuilder.Column;
@@ -44,6 +46,48 @@ public final class RelationalStoreService {
         this.jdbi = jdbi;
         this.catalog = catalog;
         this.json = json;
+    }
+
+    // ── publish-хук (Stage 2-final) ───────────────────────────────────────────────
+
+    /**
+     * Подписка на {@link VersionPublishedDomainEvent}: после реального publish'а версии
+     * (E6, {@code PublishingService}) пересобираем {@code __current} из {@code code_item}
+     * этой версии. Регистрируется в {@code AuthoringModule.build} на том же in-process bus,
+     * что и publishing.
+     */
+    public void registerOn(EventBus bus) {
+        bus.subscribe(VersionPublishedDomainEvent.class, this::onVersionPublished);
+    }
+
+    /**
+     * Пересборка {@code __current} после publish'а — post-commit, в собственной tx,
+     * <b>best-effort</b> (SPEC §3.8: side-effect не должен ломать business-операцию;
+     * вдобавок {@code SyncEventBus} изолирует исключения подписчиков). {@code code_item}
+     * остаётся источником истины: {@link #syncFromVersion} бэкфиллит {@code __draft} из
+     * него, {@link #publish} атомарно пересобирает из draft текущий снапшот.
+     */
+    void onVersionPublished(VersionPublishedDomainEvent event) {
+        if (event.payload() == null || event.payload().getVersionId() == null) {
+            return;
+        }
+        UUID versionId;
+        try {
+            versionId = UUID.fromString(event.payload().getVersionId());
+        } catch (IllegalArgumentException e) {
+            log.warn("relational store: bad version_id в VersionPublishedDomainEvent: {}",
+                    event.payload().getVersionId());
+            return;
+        }
+        try {
+            syncFromVersion(versionId);
+            PublishResult res = publish(versionId);
+            log.info("relational store: __current пересобран после publish version_id={} ({} строк)",
+                    versionId, res.rowsPublished());
+        } catch (RuntimeException e) {
+            log.warn("relational store: пересборка __current после publish version_id={} не удалась: {}",
+                    versionId, e.toString());
+        }
     }
 
     // ── provision ───────────────────────────────────────────────────────────────
@@ -109,6 +153,45 @@ public final class RelationalStoreService {
             binds.forEach(u::bind);
             u.execute();
         });
+    }
+
+    // ── live draft mirror (Stage 2-final, вызывается из AuthoringService) ──────────
+
+    /**
+     * Зеркалирует upsert одного item'а в {@code __draft}. Ключи берутся позиционно из
+     * {@code keyParts} (порядок = key_spec.parts). Лениво материализует таблицы, если
+     * справочник ещё не provisioned. Вызывается best-effort из {@code AuthoringService}
+     * после успешной записи в {@code code_item}.
+     */
+    public void mirrorUpsertItem(
+            UUID versionId,
+            List<String> keyParts,
+            Map<String, Object> attributes,
+            String labelRu,
+            String labelEn,
+            String status,
+            String effectiveFrom,
+            String effectiveTo) {
+        ResolvedTable t = ensureProvisioned(codesetIdOf(versionId));
+        Map<String, Object> cells = itemCells(
+                t, keyParts, attributes, labelRu, labelEn, status, effectiveFrom, effectiveTo);
+        validateCells(t, cells);
+        jdbi.useHandle(h -> upsertDraft(h, t, versionId, cells));
+    }
+
+    /** Зеркалирует удаление item'а из {@code __draft} по ключу (позиционно из keyParts). */
+    public void mirrorDeleteItem(UUID versionId, List<String> keyParts) {
+        ResolvedTable t = ensureProvisioned(codesetIdOf(versionId));
+        deleteDraftRow(versionId, keyCellsOf(t, keyParts));
+    }
+
+    /** Зеркалирует bulk-clear: удаляет все строки черновика версии из {@code __draft}. */
+    public void mirrorClearDraft(UUID versionId) {
+        ResolvedTable t = ensureProvisioned(codesetIdOf(versionId));
+        jdbi.useHandle(h -> h.createUpdate(
+                        "DELETE FROM " + qTable(t.draftTable) + " WHERE version_id = CAST(:v AS uuid)")
+                .bind("v", versionId)
+                .execute());
     }
 
     /**
@@ -284,6 +367,16 @@ public final class RelationalStoreService {
         return resolve(codesetId);
     }
 
+    /** Как {@link #requireProvisioned}, но при отсутствии — лениво материализует (idempotent). */
+    private ResolvedTable ensureProvisioned(UUID codesetId) {
+        boolean exists = jdbi.withExtension(PhysicalTableRegistryDao.class,
+                dao -> dao.findByCodeset(codesetId)).isPresent();
+        if (!exists) {
+            provision(codesetId);
+        }
+        return resolve(codesetId);
+    }
+
     /** Снимок CodeSet'а → имена таблиц и типизированные колонки. */
     private ResolvedTable resolve(UUID codesetId) {
         CatalogReadPort.CodeSetSnapshot cs = catalog.findCodeSet(codesetId)
@@ -375,6 +468,46 @@ public final class RelationalStoreService {
             return "string";
         }
         return type.asText("string");
+    }
+
+    /** Item-поля (keyParts позиционно + атрибуты + label/status/effective) → map колонка→значение. */
+    private Map<String, Object> itemCells(
+            ResolvedTable t,
+            List<String> keyParts,
+            Map<String, Object> attributes,
+            String labelRu,
+            String labelEn,
+            String status,
+            String effectiveFrom,
+            String effectiveTo) {
+        Map<String, Object> cells = keyCellsOf(t, keyParts);
+        if (attributes != null) {
+            attributes.forEach((name, value) -> {
+                if (t.columnTypes.containsKey(name) && !t.keyNames.contains(name)) {
+                    cells.put(name, value);
+                }
+            });
+        }
+        putIfNotNull(cells, "label_ru", labelRu);
+        putIfNotNull(cells, "label_en", labelEn);
+        putIfNotNull(cells, "status", status);
+        putIfNotNull(cells, "effective_from", effectiveFrom);
+        putIfNotNull(cells, "effective_to", effectiveTo);
+        return cells;
+    }
+
+    /** Позиционная раскладка {@code keyParts} в map ключевая_колонка→значение. */
+    private Map<String, Object> keyCellsOf(ResolvedTable t, List<String> keyParts) {
+        if (keyParts == null || keyParts.size() != t.keyNames.size()) {
+            throw new IllegalArgumentException("key_parts arity "
+                    + (keyParts == null ? "null" : keyParts.size())
+                    + " != key columns " + t.keyNames.size());
+        }
+        Map<String, Object> cells = new LinkedHashMap<>();
+        for (int i = 0; i < t.keyNames.size(); i++) {
+            cells.put(t.keyNames.get(i), keyParts.get(i));
+        }
+        return cells;
     }
 
     /** CodeItem-строка (jsonb key_parts/attributes) → map колонка→значение. */

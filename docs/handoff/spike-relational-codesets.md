@@ -64,6 +64,29 @@ CREATE TABLE rd_data."<base>__current" ( /* те же колонки без vers
 Безопасность: имена идентификаторов валидируются snake_case-паттерном, значения
 биндятся параметрами с `CAST(:p AS <type>)` — конкатенации значений в SQL нет.
 
+## Что сделано (Stage 2-final — relational driven нормальным flow'ом)
+
+Цель стадии: завязать обычный authoring-flow на relational store, чтобы
+`__draft`/`__current` наполнялись без ручных `/relational/...` вызовов.
+
+| Часть | Где |
+|------|-----|
+| Live draft-mirror | `RelationalStoreService.mirrorUpsertItem`/`mirrorDeleteItem`/`mirrorClearDraft` — точечное зеркало item'а в `__draft` (lazy provision через `ensureProvisioned`, ключи позиционно из `keyParts`) |
+| Dual-write | `AuthoringService` получил nullable `RelationalStoreService`; `addItem`/`updateItem` зеркалят из готового `CodeItemDto`, `deleteItem` — по `keyParts`, `clearAllItems` — clear, bulk — `syncFromVersion` (upsert-only пачка). Всё **best-effort** в отдельной tx через `mirror(...)` — сбой зеркала не роняет `code_item` |
+| Publish-хук | `RelationalStoreService.registerOn(EventBus)` + `onVersionPublished` — подписка на `VersionPublishedDomainEvent` (тот же bus, что у publishing). После реального publish'а (E6) post-commit пересобирает `__current`: `syncFromVersion` (бэкфилл draft из `code_item`) + `publish`. Best-effort (SPEC §3.8) |
+| Wiring | `AuthoringModule.build` создаёт один `RelationalStoreService`, регистрирует на `eventBus` и отдаёт в `AuthoringService` |
+| Тест | `RelationalStoreServiceTest` — pure-гарантии, что `onVersionPublished` никогда не бросает (null/blank/bad uuid/backend-error) |
+
+**Ключевое решение — почему через `EventBus`, а не внутрь publish-tx.** `PublishingService`
+эмитит `VersionPublishedDomainEvent` уже **после** commit'а основной tx. Реляционная
+пересборка идёт отдельной tx, best-effort — так сбой/баг зеркала не может зароллбэчить
+реальный publish (важно: локально ITs не гоняются, цена регрессии высока). `code_item`
+остаётся источником истины и на publish'е заново «кормит» relational через `syncFromVersion`,
+поэтому любое расхождение live-зеркала самоисцеляется на publish'е.
+
+**Чего сознательно НЕ делает зеркало (Stage 4):** `parent_key`/`parent_ref`/`order_index`/
+`description_*` — в `__draft`/`__current` только key + attrs + `label_*`/`status`/`effective_*`.
+
 ## Как потрогать
 
 ```bash
@@ -88,10 +111,10 @@ make psql   # \dt rd_data.*   и   SELECT * FROM rd_data."<base>__current";
 
 ## Дальше — оставшиеся стадии
 
-- **Stage 2-final — единственный источник**: завязать `AuthoringService.addItem`/`patch`/
-  bulk на `__draft` (вместо/в дополнение к `authoring.code_item`), и `publish` workflow'а
-  на пересборку `__current`. Сейчас relational write-path работает как самостоятельный
-  путь через `/relational/...`, code_item ещё ведущий.
+- ~~**Stage 2-final — единственный источник**~~ ✅ **СДЕЛАНО** (см. раздел выше): dual-write
+  на `__draft` из normal flow + publish-хук на пересборку `__current`. Остаётся как
+  best-effort зеркало поверх ведущего `code_item`; «жёсткое» переключение source-of-truth —
+  Stage 7.
 - **Stage 3 — read-path**: `CodeItemResource` GET/листинг + distribution читают из
   `rd_data` (динамический SELECT → DTO).
 - **Stage 4 — bitemporal/hierarchy**: `effective_*`/`system_*`, closure-таблица и
