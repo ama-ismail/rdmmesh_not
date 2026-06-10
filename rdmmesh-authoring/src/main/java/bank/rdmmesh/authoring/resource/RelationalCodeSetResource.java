@@ -39,6 +39,8 @@ import io.dropwizard.auth.Auth;
  *   <li>{@code GET    /relational/codesets/{id}/rows}                   — текущий PUBLISHED-снапшот (raw rows)</li>
  *   <li>{@code GET    /relational/codesets/{id}/items}                 — PUBLISHED-снапшот → CodeItemDto (Stage 3)</li>
  *   <li>{@code GET    /relational/codesets/{id}/draft-items?version_id=} — черновик → CodeItemDto (Stage 3)</li>
+ *   <li>{@code GET    /relational/codesets/{id}/closure[?version_id=]}   — closure иерархии (Stage 4)</li>
+ *   <li>{@code GET    /relational/codesets/{id}/cycles[?version_id=]}    — ключи в циклах parent_key (Stage 4)</li>
  * </ul>
  *
  * <p>Префикс {@code /relational} (а не {@code /codesets}) — чтобы не пересекаться с
@@ -187,6 +189,38 @@ public final class RelationalCodeSetResource {
         parseUuid(id);
         try {
             return store.listDraftItems(requireVersion(versionId));
+        } catch (IllegalStateException e) {
+            throw conflict(e);
+        }
+    }
+
+    @GET
+    @Path("/closure")
+    public List<RelationalStoreService.ClosureRow> closure(
+            @Auth RdmmeshPrincipal principal,
+            @PathParam("id") String id,
+            @QueryParam("version_id") String versionId) {
+        parseUuid(id);
+        try {
+            return versionId == null || versionId.isBlank()
+                    ? store.currentClosure(parseUuid(id))
+                    : store.draftClosure(parseUuid(versionId));
+        } catch (IllegalStateException e) {
+            throw conflict(e);
+        }
+    }
+
+    @GET
+    @Path("/cycles")
+    public List<List<String>> cycles(
+            @Auth RdmmeshPrincipal principal,
+            @PathParam("id") String id,
+            @QueryParam("version_id") String versionId) {
+        parseUuid(id);
+        try {
+            return versionId == null || versionId.isBlank()
+                    ? store.currentCycles(parseUuid(id))
+                    : store.draftCycles(parseUuid(versionId));
         } catch (IllegalStateException e) {
             throw conflict(e);
         }

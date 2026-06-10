@@ -123,6 +123,35 @@ production-чтения = риск отдать неполные данные п
 доказывают round-trip rd_data → канонический DTO; переключение основного чтения — Stage 7.
 Ограничение проекции: jsonb-атрибуты (object/array) приходят как JSON-текст.
 
+## Что сделано (Stage 4-full — bitemporal + иерархия)
+
+**Stage 4a — bitemporal + parent_ref.** `STANDARD` += `system_from`/`system_to`
+(timestamptz, зеркало `code_item.system_*`) и `parent_ref` (jsonb, cross-codeset ссылка).
+Sync/mirror/projection тянут их; `projectRow` отдаёт `system_*` строками и `parent_ref`
+как Map (`parseMap`). Теперь `__draft`/`__current` несут **весь** набор полей `code_item`.
+
+**Stage 4b — closure + cycle-detection (on-demand, без материализации).** В
+`RelationalDdlBuilder` — чистые генераторы рекурсивного SQL (тестируются без БД):
+
+- `closureQuery` — `WITH RECURSIVE` по `parent_key`: пары `(ancestor_key, descendant_key,
+  depth)`, self-reflexive + walk вверх, лимит глубины 32 (как триггерный V022).
+  `self_key = jsonb_build_array(<ключевые колонки>)` — та же форма, что в `parent_key`
+  ребёнка, поэтому join сравнивает jsonb напрямую.
+- `cycleDetectionQuery` — нативный `CYCLE self_key SET is_cycle USING path` (PG 14+):
+  ключи, участвующие в цикле (аналог триггерной проверки V023, on-demand).
+- `RelationalStoreService.currentClosure`/`draftClosure`/`currentCycles`/`draftCycles`
+  исполняют их и парсят jsonb-ключи в `List<String>` (`ClosureRow`).
+- REST (read-only): `GET …/closure[?version_id=]`, `GET …/cycles[?version_id=]`
+  (без `version_id` — по `__current`, с ним — по `__draft` версии).
+
+Отличие от `code_item`: closure **не материализуется** (нет per-table closure-таблицы +
+триггеров) — вычисляется запросом. Для спайка это проще и достаточно; материализация —
+если упрётся в производительность. Рекурсивный SQL локально не прогоняется (нет БД) —
+покрыт pure-тестами на структуру, исполнение валидирует CI.
+
+Чего всё ещё НЕТ: per-row `content_hash`/детерминированная сериализация и колоночный
+`DiffCalculator` — это **Stage 5**.
+
 ## Как потрогать
 
 ```bash
@@ -154,9 +183,9 @@ make psql   # \dt rd_data.*   и   SELECT * FROM rd_data."<base>__current";
 - ~~**Stage 3 — read-path**~~ ✅ **СДЕЛАНО** (additive, см. раздел выше): проекция
   `rd_data` → `CodeItemDto`, эндпоинты `/items` и `/draft-items`. Hard-switch
   `CodeItemResource`/distribution на rd_data — Stage 7.
-- **Stage 4-full — bitemporal/hierarchy**: `system_*` (Stage 4-lite дал `effective_*`/
-  `parent_key`/`order_index`/`description_*`), closure-таблица и cycle-detection на
-  реляционной модели, `parent_ref`, per-row `content_hash`.
+- ~~**Stage 4-full — bitemporal/hierarchy**~~ ✅ **СДЕЛАНО** (см. раздел выше): `system_*`,
+  `parent_ref` (4a) + on-demand closure и cycle-detection по `parent_key` (4b). Материализация
+  closure-таблицы и per-row `content_hash` вынесены в Stage 5 / при необходимости.
 - **Stage 5 — publish/diff/hash**: детерминированная сериализация строк физической
   таблицы для `content_hash`/подписи; `DiffCalculator` на колонках.
 - **Stage 6 — FK**: `column_refs` (E25) → реальные `ALTER TABLE ... ADD FOREIGN KEY`

@@ -196,6 +196,85 @@ public final class RelationalDdlBuilder {
         return sb.toString();
     }
 
+    // ── иерархия: closure + cycle-detection по parent_key (Stage 4-full) ──────────
+
+    /**
+     * Рекурсивный CTE closure иерархии физической таблицы: пары
+     * {@code (ancestor_key, descendant_key, depth)} по {@code parent_key} (jsonb-массив
+     * key-part'ов). Аналог {@code authoring.code_item_closure}, но вычисляется on-demand
+     * (без материализации). Self-reflexive (depth 0) + walk вверх; глубина ограничена 32
+     * (как в V022) — на цикле рекурсия обрубается этим лимитом.
+     *
+     * <p>{@code self_key} строится как {@code jsonb_build_array(<ключевые колонки>)} — это
+     * та же форма, что хранится в {@code parent_key} ребёнка, поэтому join сравнивает jsonb.
+     */
+    public static String closureQuery(
+            String schema, String table, List<String> keyNames, boolean filterByVersion) {
+        require(isValidIdentifier(schema), "schema: " + schema);
+        require(TABLE_IDENT.matcher(table).matches(), "table name invalid/too long: " + table);
+        String selfKey = jsonbBuildArray(keyNames);
+        String from = q(schema) + '.' + q(table);
+        String filter = filterByVersion ? " WHERE \"version_id\" = CAST(:v AS uuid)" : "";
+        return """
+            WITH RECURSIVE src AS (
+                SELECT %1$s AS self_key, "parent_key" AS parent_key FROM %2$s%3$s
+            ),
+            walk AS (
+                SELECT self_key AS ancestor_key, self_key AS descendant_key,
+                       parent_key AS next_parent, 0 AS depth
+                  FROM src
+                UNION ALL
+                SELECT p.self_key, w.descendant_key, p.parent_key, w.depth + 1
+                  FROM walk w
+                  JOIN src p ON p.self_key = w.next_parent
+                 WHERE w.next_parent IS NOT NULL AND w.depth < 32
+            )
+            SELECT DISTINCT ancestor_key, descendant_key, depth FROM walk
+            """.formatted(selfKey, from, filter);
+    }
+
+    /**
+     * Рекурсивный CTE с нативным {@code CYCLE}-обнаружением (PG 14+): возвращает ключи
+     * ({@code self_key} jsonb), участвующие в цикле {@code parent_key}. Демонстрация
+     * cycle-detection на реляционной модели (вместо триггерной проверки V023).
+     */
+    public static String cycleDetectionQuery(
+            String schema, String table, List<String> keyNames, boolean filterByVersion) {
+        require(isValidIdentifier(schema), "schema: " + schema);
+        require(TABLE_IDENT.matcher(table).matches(), "table name invalid/too long: " + table);
+        String selfKey = jsonbBuildArray(keyNames);
+        String from = q(schema) + '.' + q(table);
+        String filter = filterByVersion ? " WHERE \"version_id\" = CAST(:v AS uuid)" : "";
+        return """
+            WITH RECURSIVE src AS (
+                SELECT %1$s AS self_key, "parent_key" AS parent_key FROM %2$s%3$s
+            ),
+            walk AS (
+                SELECT self_key, parent_key AS next_parent FROM src
+                UNION ALL
+                SELECT p.self_key, p.parent_key
+                  FROM walk w
+                  JOIN src p ON p.self_key = w.next_parent
+                 WHERE w.next_parent IS NOT NULL
+            ) CYCLE self_key SET is_cycle USING path
+            SELECT DISTINCT self_key FROM walk WHERE is_cycle
+            """.formatted(selfKey, from, filter);
+    }
+
+    /** {@code jsonb_build_array("k1", "k2", ...)} из (провалидированных) ключевых колонок. */
+    private static String jsonbBuildArray(List<String> keyNames) {
+        require(keyNames != null && !keyNames.isEmpty(), "at least one key column required");
+        StringBuilder sb = new StringBuilder("jsonb_build_array(");
+        for (int i = 0; i < keyNames.size(); i++) {
+            require(isValidIdentifier(keyNames.get(i)), "key column: " + keyNames.get(i));
+            if (i > 0) {
+                sb.append(", ");
+            }
+            sb.append(q(keyNames.get(i)));
+        }
+        return sb.append(')').toString();
+    }
+
     private static List<Column> concat(List<Column> a, List<Column> b) {
         List<Column> out = new ArrayList<>(a);
         if (b != null) {

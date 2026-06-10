@@ -453,6 +453,58 @@ public final class RelationalStoreService {
         }
     }
 
+    // ── иерархия: closure + cycle-detection (Stage 4-full) ────────────────────────
+
+    /** Closure иерархии PUBLISHED-снапшота ({@code __current}) по {@code parent_key}. */
+    public List<ClosureRow> currentClosure(UUID codesetId) {
+        ResolvedTable t = requireProvisioned(codesetId);
+        return runClosure(RelationalDdlBuilder.closureQuery(SCHEMA, t.currentTable, t.keyNames, false), null);
+    }
+
+    /** Closure иерархии черновика версии ({@code __draft WHERE version_id}). */
+    public List<ClosureRow> draftClosure(UUID versionId) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        return runClosure(
+                RelationalDdlBuilder.closureQuery(SCHEMA, t.draftTable, t.keyNames, true), versionId);
+    }
+
+    /** Ключи, участвующие в цикле {@code parent_key}, в PUBLISHED-снапшоте ({@code __current}). */
+    public List<List<String>> currentCycles(UUID codesetId) {
+        ResolvedTable t = requireProvisioned(codesetId);
+        return runCycles(RelationalDdlBuilder.cycleDetectionQuery(SCHEMA, t.currentTable, t.keyNames, false), null);
+    }
+
+    /** Ключи, участвующие в цикле {@code parent_key}, в черновике версии. */
+    public List<List<String>> draftCycles(UUID versionId) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        return runCycles(
+                RelationalDdlBuilder.cycleDetectionQuery(SCHEMA, t.draftTable, t.keyNames, true), versionId);
+    }
+
+    private List<ClosureRow> runClosure(String sql, UUID versionId) {
+        return jdbi.withHandle(h -> {
+            var q = h.createQuery(sql);
+            if (versionId != null) {
+                q.bind("v", versionId);
+            }
+            return q.map((rs, ctx) -> new ClosureRow(
+                            parseStringList(rs.getString("ancestor_key"), json),
+                            parseStringList(rs.getString("descendant_key"), json),
+                            rs.getInt("depth")))
+                    .list();
+        });
+    }
+
+    private List<List<String>> runCycles(String sql, UUID versionId) {
+        return jdbi.withHandle(h -> {
+            var q = h.createQuery(sql);
+            if (versionId != null) {
+                q.bind("v", versionId);
+            }
+            return q.map((rs, ctx) -> parseStringList(rs.getString("self_key"), json)).list();
+        });
+    }
+
     // ── row write helper ─────────────────────────────────────────────────────────
 
     private void validateCells(ResolvedTable t, Map<String, Object> cells) {
@@ -777,6 +829,9 @@ public final class RelationalStoreService {
     public record SyncResult(UUID codesetId, String draftTable, int rowsLoaded) {}
 
     public record PublishResult(UUID codesetId, String currentTable, int rowsPublished) {}
+
+    /** Пара closure-иерархии: предок → потомок на расстоянии {@code depth} рёбер. */
+    public record ClosureRow(List<String> ancestorKey, List<String> descendantKey, int depth) {}
 
     private record ItemRow(
             String keyPartsJson,

@@ -173,4 +173,45 @@ class RelationalDdlBuilderTest {
         assertThat(sql).contains("ADD COLUMN IF NOT EXISTS \"status\" text DEFAULT 'ACTIVE'");
         assertThat(sql).doesNotContain("NOT NULL");
     }
+
+    // ── Stage 4-full: closure + cycle-detection ──────────────────────────────────
+
+    @Test
+    void closure_query_builds_recursive_cte_over_jsonb_key() {
+        String sql = RelationalDdlBuilder.closureQuery(
+                "rd_data", "d__c__current", List.of("branch_id"), false);
+        assertThat(sql).contains("WITH RECURSIVE");
+        assertThat(sql).contains("jsonb_build_array(\"branch_id\")");
+        assertThat(sql).contains("FROM \"rd_data\".\"d__c__current\"");
+        assertThat(sql).contains("w.depth < 32");
+        assertThat(sql).contains("ancestor_key").contains("descendant_key").contains("depth");
+        assertThat(sql).doesNotContain("version_id"); // current без фильтра
+    }
+
+    @Test
+    void closure_query_composite_key_and_version_filter() {
+        String sql = RelationalDdlBuilder.closureQuery(
+                "rd_data", "d__c__draft", List.of("seg", "rating"), true);
+        assertThat(sql).contains("jsonb_build_array(\"seg\", \"rating\")");
+        assertThat(sql).contains("WHERE \"version_id\" = CAST(:v AS uuid)");
+    }
+
+    @Test
+    void cycle_detection_query_uses_native_cycle_clause() {
+        String sql = RelationalDdlBuilder.cycleDetectionQuery(
+                "rd_data", "d__c__current", List.of("code"), false);
+        assertThat(sql).contains("CYCLE self_key SET is_cycle USING path");
+        assertThat(sql).contains("WHERE is_cycle");
+        assertThat(sql).contains("jsonb_build_array(\"code\")");
+    }
+
+    @Test
+    void hierarchy_queries_reject_bad_key_columns() {
+        assertThatThrownBy(() -> RelationalDdlBuilder.closureQuery(
+                        "rd_data", "d__c", List.of("Bad-Name"), false))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RelationalDdlBuilder.cycleDetectionQuery(
+                        "rd_data", "d__c", List.of(), false))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }
