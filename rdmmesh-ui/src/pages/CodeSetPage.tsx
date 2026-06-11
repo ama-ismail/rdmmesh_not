@@ -29,6 +29,7 @@ import { Loader } from "@/components/Loader";
 import { StatusTag } from "@/components/StatusTag";
 import { RequestDeletionButton } from "@/components/RequestDeletionButton";
 import { SchemaFieldOrderEditor } from "@/components/SchemaFieldOrderEditor";
+import { SchemaAttributeEditor } from "@/components/SchemaAttributeEditor";
 import { CodeSetReferencesPanel } from "@/components/CodeSetReferencesPanel";
 import type { CodeSetVersion, VersionStatus } from "@/api/types";
 
@@ -180,6 +181,11 @@ export function CodeSetPage() {
         <Loader {...schema}>
           {(s) => (
             <Space direction="vertical" style={{ width: "100%" }} size={16}>
+              <SchemaAttributeEditor
+                codesetId={id}
+                jsonSchema={s.json_schema}
+                canEdit={canEditSchema}
+              />
               <SchemaFieldOrderEditor
                 codesetId={id}
                 jsonSchema={s.json_schema}

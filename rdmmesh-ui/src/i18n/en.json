@@ -108,6 +108,34 @@
     "saved": "Attribute order saved",
     "noFields": "Schema has no attributes (properties)"
   },
+  "schemaAttr": {
+    "title": "Codeset fields (attributes)",
+    "hint": "Add your own field — e.g. \"probability\" or \"category\". The column appears on the next DRAFT version.",
+    "addButton": "Add field",
+    "modalTitle": "New codeset field",
+    "fieldName": "Field name (latin, snake_case)",
+    "fieldNameHint": "e.g. probability, category, weight",
+    "fieldNamePattern": "Latin letters, digits and _ only, starts with a letter, ≤63 chars",
+    "fieldType": "Field type",
+    "enumValues": "Allowed values (comma-separated)",
+    "enumHint": "Only for the \"list\" type. e.g. A, B, C",
+    "added": "Field \"{{name}}\" added to schema",
+    "deleted": "Field \"{{name}}\" removed from schema",
+    "deleteConfirm": "Remove field \"{{name}}\" from schema?",
+    "deleteConfirmHint": "Only the field definition is removed. Values already entered in published versions remain.",
+    "duplicate": "A field with this name already exists",
+    "reserved": "This name is reserved by the system",
+    "noFields": "No custom fields yet. Click \"Add field\".",
+    "type": {
+      "number": "Number (decimal)",
+      "integer": "Integer",
+      "string": "Text",
+      "boolean": "Yes / No",
+      "date": "Date",
+      "enum": "List of values",
+      "json": "Structure (JSON)"
+    }
+  },
   "version": {
     "title": "Versions",
     "version": "Version",
