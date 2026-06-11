@@ -272,6 +272,15 @@ export const apiMutations = {
       body: JSON.stringify({ references }),
     }),
 
+  // Материализация column_refs в настоящие Postgres FK между __current-таблицами
+  // (Stage 6 / applyForeignKeys). Тела нет — связи читаются из column_refs. Отчёт:
+  // applied (создано) + skipped (пропущено, с причиной). Defensive: FK только если
+  // целевая колонка — единственная PK-колонка целевого __current.
+  applyForeignKeys: (codesetId: string) =>
+    apiFetch<ForeignKeyReport>(`/relational/codesets/${codesetId}/foreign-keys`, {
+      method: "POST",
+    }),
+
   // E11.2a — DRAFT lifecycle + workflow transitions
   createDraft: (codesetId: string, body: CreateDraftRequest = {}) =>
     apiFetch<CodeSetVersion>(`/versions/by-codeset/${codesetId}`, {
@@ -636,6 +645,24 @@ export interface DeletionRequestView {
   decided_at: string | null;
   codeset_deleted: boolean;
   has_published_versions: boolean;
+}
+
+// Отчёт POST /relational/codesets/{id}/foreign-keys (Java records, camelCase).
+export interface AppliedFk {
+  fromColumn: string;
+  toCodesetId: string;
+  toTable: string;
+  toColumn: string;
+  constraint: string;
+}
+export interface SkippedFk {
+  fromColumn: string;
+  toCodesetId: string;
+  reason: string;
+}
+export interface ForeignKeyReport {
+  applied: AppliedFk[];
+  skipped: SkippedFk[];
 }
 
 // Возвращается из POST /versions/{id}/closure/rebuild (Java record, camelCase).

@@ -13,11 +13,11 @@ import {
   Typography,
   App as AntApp,
 } from "antd";
-import { LinkOutlined, PlusOutlined } from "@ant-design/icons";
+import { DatabaseOutlined, LinkOutlined, PlusOutlined } from "@ant-design/icons";
 import { Link } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { api, apiMutations } from "@/api/endpoints";
+import { api, apiMutations, type ForeignKeyReport } from "@/api/endpoints";
 import { qk } from "@/api/queryClient";
 import { useApi } from "@/api/useApi";
 import type { CodeSet, CodeSetRef } from "@/api/types";
@@ -63,6 +63,7 @@ export function CodeSetReferencesPanel({
   const { message } = AntApp.useApp();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [report, setReport] = useState<ForeignKeyReport | null>(null);
   const [form] = Form.useForm<AddForm>();
 
   const refs = useMemo(() => codeset.references ?? [], [codeset.references]);
@@ -96,6 +97,19 @@ export function CodeSetReferencesPanel({
       queryClient.invalidateQueries({ queryKey: qk.codesets.one(codeset.id) });
       setOpen(false);
       form.resetFields();
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  // Stage 6 — материализовать column_refs в настоящие Postgres FK (видны в DBeaver).
+  const applyFk = useMutation({
+    mutationFn: () => apiMutations.applyForeignKeys(codeset.id),
+    onSuccess: (rep) => {
+      setReport(rep);
+      const applied = rep.applied.length;
+      const skipped = rep.skipped.length;
+      if (applied > 0) message.success(`Создано FK: ${applied}` + (skipped ? `, пропущено: ${skipped}` : ""));
+      else message.warning(skipped ? `Создавать нечего, пропущено: ${skipped}` : "Связей для материализации нет");
     },
     onError: (e: Error) => message.error(e.message),
   });
@@ -137,9 +151,20 @@ export function CodeSetReferencesPanel({
       style={{ marginBottom: 16 }}
       extra={
         canEdit ? (
-          <Button size="small" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
-            Добавить связь
-          </Button>
+          <Space>
+            <Button
+              size="small"
+              icon={<DatabaseOutlined />}
+              loading={applyFk.isPending}
+              disabled={refs.length === 0}
+              onClick={() => applyFk.mutate()}
+            >
+              Применить FK в БД
+            </Button>
+            <Button size="small" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
+              Добавить связь
+            </Button>
+          </Space>
         ) : null
       }
     >
@@ -244,6 +269,57 @@ export function CodeSetReferencesPanel({
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="Результат: применение FK в БД"
+        open={report !== null}
+        onCancel={() => setReport(null)}
+        footer={<Button onClick={() => setReport(null)}>Закрыть</Button>}
+      >
+        <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
+          FK ставятся между опубликованными таблицами <Typography.Text code>__current</Typography.Text>.
+          Связь пропускается, если целевая колонка не уникальна или справочник не опубликован.
+        </Typography.Paragraph>
+
+        <Typography.Text strong>Создано ({report?.applied.length ?? 0})</Typography.Text>
+        {report && report.applied.length > 0 ? (
+          <List
+            size="small"
+            dataSource={report.applied}
+            renderItem={(a) => (
+              <List.Item>
+                <Space wrap>
+                  <Tag color="green">{a.fromColumn}</Tag>
+                  <Typography.Text type="secondary">→</Typography.Text>
+                  <Typography.Text code>
+                    {a.toTable}.{a.toColumn}
+                  </Typography.Text>
+                </Space>
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Typography.Paragraph type="secondary">— нет</Typography.Paragraph>
+        )}
+
+        <Typography.Text strong>Пропущено ({report?.skipped.length ?? 0})</Typography.Text>
+        {report && report.skipped.length > 0 ? (
+          <List
+            size="small"
+            dataSource={report.skipped}
+            renderItem={(s) => (
+              <List.Item>
+                <Space wrap>
+                  <Tag color="orange">{s.fromColumn}</Tag>
+                  <Typography.Text type="secondary">{s.reason}</Typography.Text>
+                </Space>
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Typography.Paragraph type="secondary">— нет</Typography.Paragraph>
+        )}
       </Modal>
     </Card>
   );
