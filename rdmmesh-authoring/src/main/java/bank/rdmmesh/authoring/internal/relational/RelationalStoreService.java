@@ -22,6 +22,7 @@ import bank.rdmmesh.api.eventbus.VersionPublishedDomainEvent;
 import bank.rdmmesh.api.port.CatalogReadPort;
 import bank.rdmmesh.authoring.internal.CanonicalSnapshot;
 import bank.rdmmesh.authoring.internal.dao.PhysicalTableRegistryDao;
+import bank.rdmmesh.authoring.internal.dao.RelationalSyncStatusDao;
 import bank.rdmmesh.authoring.internal.relational.RelationalDdlBuilder.Column;
 import bank.rdmmesh.authoring.resource.CodeItemDto;
 
@@ -87,12 +88,95 @@ public final class RelationalStoreService {
         try {
             // Stage 7c: draft уже источник истины — sync из code_item больше не нужен.
             PublishResult res = publish(versionId);
+            upsertSyncStatus(versionId, "OK", null);
             log.info("relational store: __current пересобран после publish version_id={} ({} строк)",
                     versionId, res.rowsPublished());
         } catch (RuntimeException e) {
+            // Stage 7 (A): провал пересборки больше не молчит — фиксируем STALE с причиной.
+            upsertSyncStatus(versionId, "STALE", shorten(rootMessage(e)));
             log.warn("relational store: пересборка __current после publish version_id={} не удалась: {}",
                     versionId, e.toString());
         }
+    }
+
+    // ── publish-gate + sync-status (Stage 7, B+A) ─────────────────────────────────
+
+    /** Sentinel для принудительного rollback'а dry-run'а (это лишь проверка, не запись). */
+    private static final class DryRunRollback extends RuntimeException {
+        DryRunRollback() {
+            super(null, null, false, false);
+        }
+    }
+
+    /**
+     * Сухой прогон пересборки {@code __current} для версии: выполняет
+     * {@code DELETE __current} + {@code INSERT из __draft} в транзакции и
+     * ПРИНУДИТЕЛЬНО откатывает. Если бизнес-данные нарушают материализованный FK
+     * (или иной констрейнт) — возвращает человекочитаемую причину; иначе empty.
+     * Сам по себе ничего не меняет.
+     */
+    public Optional<String> dryRunPublishReason(UUID versionId) {
+        ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
+        StringBuilder cols = new StringBuilder();
+        for (Column c : t.dataColumns) {
+            if (cols.length() > 0) cols.append(", ");
+            cols.append(RelationalDdlBuilder.q(c.name()));
+        }
+        String insertSelect = "INSERT INTO " + qTable(t.currentTable) + " (" + cols + ")"
+                + " SELECT " + cols + " FROM " + qTable(t.draftTable)
+                + " WHERE version_id = CAST(:v AS uuid)";
+        try {
+            jdbi.inTransaction(h -> {
+                h.createUpdate("DELETE FROM " + qTable(t.currentTable)).execute();
+                h.createUpdate(insertSelect).bind("v", versionId).execute();
+                throw new DryRunRollback();
+            });
+            return Optional.empty(); // недостижимо: DryRunRollback всегда бросается
+        } catch (DryRunRollback ok) {
+            return Optional.empty();
+        } catch (RuntimeException e) {
+            return Optional.of(shorten(rootMessage(e)));
+        }
+    }
+
+    /**
+     * Пред-проверка перед публикацией (B): если пересборка невозможна — фиксирует
+     * статус {@code BLOCKED} с причиной и возвращает её. Empty — публиковать можно.
+     */
+    public Optional<String> recordPublishBlockReason(UUID versionId) {
+        Optional<String> reason = dryRunPublishReason(versionId);
+        reason.ifPresent(r -> upsertSyncStatus(versionId, "BLOCKED", r));
+        return reason;
+    }
+
+    /** Текущий статус синхронизации rd_data для версии (A). */
+    public Optional<RelationalSyncStatusDao.SyncStatusRow> syncStatus(UUID versionId) {
+        return jdbi.withExtension(RelationalSyncStatusDao.class, d -> d.find(versionId));
+    }
+
+    private void upsertSyncStatus(UUID versionId, String state, String reason) {
+        try {
+            UUID codesetId = codesetIdOf(versionId);
+            jdbi.useExtension(RelationalSyncStatusDao.class,
+                    d -> d.upsert(versionId, codesetId, state, reason));
+        } catch (RuntimeException e) {
+            log.warn("relational store: не удалось записать sync-status {} для version_id={}: {}",
+                    state, versionId, e.toString());
+        }
+    }
+
+    private static String rootMessage(Throwable e) {
+        Throwable cur = e;
+        while (cur.getCause() != null && cur.getCause() != cur) {
+            cur = cur.getCause();
+        }
+        String m = cur.getMessage();
+        return m == null ? e.toString() : m;
+    }
+
+    private static String shorten(String s) {
+        String one = s.replaceAll("\\s+", " ").trim();
+        return one.length() > 500 ? one.substring(0, 500) + "…" : one;
     }
 
     // ── provision ───────────────────────────────────────────────────────────────

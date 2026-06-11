@@ -1,5 +1,6 @@
 package bank.rdmmesh.api.port;
 
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -29,4 +30,13 @@ public interface PublishedSnapshotPort {
      * @throws IllegalArgumentException если versionId не существует.
      */
     byte[] canonicalSnapshotBytes(UUID versionId);
+
+    /**
+     * Пред-проверка публикации (Stage 7 B): можно ли пересобрать {@code __current}
+     * под эту версию, не нарушив материализованные FK/констрейнты rd_data.
+     * Возвращает причину блокировки (если публиковать нельзя) либо empty (можно).
+     * При блокировке реализация фиксирует видимый статус {@code BLOCKED} (Stage 7 A),
+     * чтобы провал не был молчаливым.
+     */
+    Optional<String> publishBlockReason(UUID versionId);
 }

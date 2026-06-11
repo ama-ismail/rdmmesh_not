@@ -1,5 +1,6 @@
 package bank.rdmmesh.authoring.internal;
 
+import java.util.Optional;
 import java.util.UUID;
 
 import bank.rdmmesh.api.port.PublishedSnapshotPort;
@@ -23,5 +24,10 @@ public final class PublishedSnapshotAdapter implements PublishedSnapshotPort {
     @Override
     public byte[] canonicalSnapshotBytes(UUID versionId) {
         return relational.canonicalBytes(versionId);
+    }
+
+    @Override
+    public Optional<String> publishBlockReason(UUID versionId) {
+        return relational.recordPublishBlockReason(versionId);
     }
 }

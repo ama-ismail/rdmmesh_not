@@ -48,6 +48,7 @@ export const qk = {
     history: (id: string) => ["versions", id, "history"] as const,
     verify: (id: string) => ["versions", id, "verify"] as const,
     diff: (toId: string, fromId: string) => ["versions", toId, "diff", fromId] as const,
+    syncStatus: (id: string) => ["versions", id, "sync-status"] as const,
   },
   tasks: {
     my: () => ["tasks", "my"] as const,

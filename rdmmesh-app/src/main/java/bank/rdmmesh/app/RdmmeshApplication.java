@@ -214,6 +214,7 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
                 eventBus, environment.getObjectMapper());
         environment.jersey().register(publishing.verify());
         environment.jersey().register(publishing.subscriptions());
+        environment.jersey().register(publishing.publishRetry());
         environment.lifecycle().manage(publishing.deliveryWorker());
 
         // E7 — Ownership webhook receiver. POST /webhooks/om/ownership принимает

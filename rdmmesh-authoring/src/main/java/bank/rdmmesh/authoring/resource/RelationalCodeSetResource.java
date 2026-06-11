@@ -241,6 +241,32 @@ public final class RelationalCodeSetResource {
     }
 
     @GET
+    @Path("/sync-status")
+    public SyncStatusResponse syncStatus(
+            @Auth RdmmeshPrincipal principal,
+            @PathParam("id") String id,
+            @QueryParam("version_id") String versionId) {
+        parseUuid(id);
+        UUID vid = parseUuid(versionId);
+        return store.syncStatus(vid)
+                .map(r -> new SyncStatusResponse(
+                        r.versionId().toString(),
+                        r.codesetId().toString(),
+                        r.state(),
+                        r.reason(),
+                        r.updatedAt() == null ? null : r.updatedAt().toString()))
+                .orElse(new SyncStatusResponse(versionId, id, "UNKNOWN", null, null));
+    }
+
+    /** Ответ sync-status (Stage 7 A): state ∈ OK | STALE | BLOCKED | UNKNOWN. */
+    public record SyncStatusResponse(
+            @JsonProperty("version_id") String versionId,
+            @JsonProperty("codeset_id") String codesetId,
+            @JsonProperty("state") String state,
+            @JsonProperty("reason") String reason,
+            @JsonProperty("updated_at") String updatedAt) {}
+
+    @GET
     @Path("/content-hash")
     public ContentHashResponse contentHash(
             @Auth RdmmeshPrincipal principal,

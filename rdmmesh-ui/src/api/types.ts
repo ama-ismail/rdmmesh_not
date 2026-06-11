@@ -182,6 +182,16 @@ export interface ApprovalTask {
   createdAt: string;
 }
 
+// Stage 7 (A): статус синхронизации rd_data после публикации версии.
+export type RelationalSyncState = "OK" | "STALE" | "BLOCKED" | "UNKNOWN";
+export interface RelationalSyncStatus {
+  version_id: string;
+  codeset_id: string;
+  state: RelationalSyncState;
+  reason?: string | null;
+  updated_at?: string | null;
+}
+
 // E17 / BR-21: кандидат-согласующий из справочника ролей домена.
 // ApproverDirectoryPort.Approver — Java record без @JsonProperty → camelCase.
 export type DirectoryRole = "STEWARD" | "BUSINESS_OWNER";

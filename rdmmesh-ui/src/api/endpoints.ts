@@ -16,6 +16,7 @@ import type {
   Domain,
   ItemsPage,
   Lang,
+  RelationalSyncStatus,
   Subscription,
   SubscriptionFilter,
   VerifyResponse,
@@ -49,6 +50,12 @@ export const api = {
   diffVersions: (toVersionId: string, fromVersionId: string) =>
     apiFetch<VersionDiffResponse>(
       `/versions/${toVersionId}/diff?from=${encodeURIComponent(fromVersionId)}`,
+    ),
+
+  // Stage 7 (A) — статус синхронизации rd_data после публикации версии.
+  relationalSyncStatus: (codesetId: string, versionId: string) =>
+    apiFetch<RelationalSyncStatus>(
+      `/relational/codesets/${codesetId}/sync-status?version_id=${encodeURIComponent(versionId)}`,
     ),
 
   // Workflow
@@ -290,6 +297,13 @@ export const apiMutations = {
 
   deleteDraft: (versionId: string) =>
     apiFetch<void>(`/versions/${versionId}`, { method: "DELETE" }),
+
+  // Stage 7 (B) — повтор авто-публикации после фикса данных (RDM_ADMIN).
+  // Нужен, когда публикация была отклонена пред-проверкой (BLOCKED).
+  retryPublish: (versionId: string) =>
+    apiFetch<{ outcome: string }>(`/versions/${versionId}/publish-retry`, {
+      method: "POST",
+    }),
 
   createItem: (versionId: string, item: NewItemBody) =>
     apiFetch<CodeItem>(`/versions/${versionId}/items`, {
