@@ -482,6 +482,10 @@ export const adminApi = {
       `/admin/users/search?q=${encodeURIComponent(q)}&limit=${limit}`,
     ),
 
+  // Согласующие домена (directory) — адресно по domain_id (RDM_ADMIN).
+  listDomainApprovers: (domainId: string) =>
+    apiFetch<Approver[]>(`/admin/domains/${domainId}/approvers`),
+
   // Tasks
   myAdminTasks: () => apiFetch<AdminTaskView[]>("/admin/tasks/my"),
 
@@ -558,6 +562,29 @@ export const adminMutations = {
       method: "POST",
       body: JSON.stringify({ action, notes: notes ?? null }),
     }),
+
+  // Согласующие домена (directory) по domain_id. Добавляет/удаляет одного
+  // кандидата (STEWARD | BUSINESS_OWNER), source RDM_ADMIN_LOCAL. Работает для
+  // локальных доменов без om_domain_id (в отличие от reload).
+  addDomainApprover: (
+    domainId: string,
+    body: {
+      role: DirectoryRole;
+      om_user_id: string;
+      username?: string | null;
+      display_name?: string | null;
+    },
+  ) =>
+    apiFetch<Approver[]>(`/admin/domains/${domainId}/approvers`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  removeDomainApprover: (domainId: string, role: DirectoryRole, omUserId: string) =>
+    apiFetch<void>(
+      `/admin/domains/${domainId}/approvers?role=${role}&om_user_id=${encodeURIComponent(omUserId)}`,
+      { method: "DELETE" },
+    ),
 
   // E22 — заявки на удаление CodeSet'а.
   submitDeletionRequest: (codesetId: string, reason: string) =>

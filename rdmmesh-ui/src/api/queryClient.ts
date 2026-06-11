@@ -57,6 +57,7 @@ export const qk = {
     domains: () => ["admin", "domains"] as const,
     domain: (id: string) => ["admin", "domains", id] as const,
     domainOwnership: (id: string) => ["admin", "domains", id, "ownership"] as const,
+    domainApprovers: (id: string) => ["admin", "domains", id, "approvers"] as const,
     codesetOwnership: (id: string) => ["admin", "codesets", id, "ownership"] as const,
     userSearch: (q: string) => ["admin", "users", "search", q] as const,
     tasksMy: () => ["admin", "tasks", "my"] as const,

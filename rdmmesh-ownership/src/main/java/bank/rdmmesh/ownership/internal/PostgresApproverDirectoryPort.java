@@ -73,4 +73,23 @@ public final class PostgresApproverDirectoryPort implements ApproverDirectoryPor
                 + "(full replace, BR-22)", safe.size(), inserted);
         return inserted;
     }
+
+    @Override
+    public void addLocal(
+            UUID domainId, String role, UUID omUserId, String username, String displayName) {
+        String safeUsername = username == null || username.isBlank()
+                ? omUserId.toString()
+                : username;
+        jdbi.useExtension(DomainRoleDirectoryDao.class, d -> d.insertByDomainId(
+                domainId, role, omUserId, safeUsername, displayName, "RDM_ADMIN_LOCAL"));
+        log.info("domain_role_directory addLocal: domain={} role={} user={} (RDM_ADMIN_LOCAL)",
+                domainId, role, omUserId);
+    }
+
+    @Override
+    public boolean removeLocal(UUID domainId, String role, UUID omUserId) {
+        int deleted = jdbi.withExtension(DomainRoleDirectoryDao.class,
+                d -> d.deleteEntry(domainId, role, omUserId));
+        return deleted > 0;
+    }
 }

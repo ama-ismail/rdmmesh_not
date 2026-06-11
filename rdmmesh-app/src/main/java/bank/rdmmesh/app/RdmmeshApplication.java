@@ -121,6 +121,8 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
                 OwnershipModule.buildApproversResource(approverDirectory));
         environment.jersey().register(
                 OwnershipModule.buildDirectoryAdminResource(approverDirectory));
+        environment.jersey().register(
+                OwnershipModule.buildApproversAdminResource(approverDirectory));
 
         CatalogModule.Resources catalog = CatalogModule.build(jdbi, ownershipPort);
         environment.jersey().register(catalog.domains());

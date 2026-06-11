@@ -46,6 +46,21 @@ public interface ApproverDirectoryPort {
      */
     int reload(List<DirectoryEntry> entries);
 
+    /**
+     * Адресное добавление одного согласующего для конкретного домена по
+     * {@code domainId} (источник {@code RDM_ADMIN_LOCAL}). В отличие от
+     * {@link #reload}, не резолвит {@code om_domain_id} и ничего не стирает —
+     * подходит для локальных доменов без связи с OM. Идемпотентно (upsert по
+     * {@code (domain_id, role, om_user_id)}).
+     */
+    void addLocal(UUID domainId, String role, UUID omUserId, String username, String displayName);
+
+    /**
+     * Удаляет одного согласующего домена. Возвращает {@code true}, если строка
+     * существовала и была удалена.
+     */
+    boolean removeLocal(UUID domainId, String role, UUID omUserId);
+
     /** Кандидат-согласующий (для approvers-эндпоинта UI). */
     record Approver(UUID omUserId, String username, String displayName, String role) {}
 

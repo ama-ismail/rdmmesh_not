@@ -58,6 +58,38 @@ public interface DomainRoleDirectoryDao {
             @Bind("role") String role,
             @Bind("omUserId") UUID omUserId);
 
+    /**
+     * Адресная вставка по {@code domain_id} (без резолва om_domain_id) — для
+     * локальных доменов. Upsert по уникальному ключу (domain_id, role, om_user_id).
+     */
+    @SqlUpdate(
+            """
+            INSERT INTO ownership.domain_role_directory
+                (domain_id, role, om_user_id, username, display_name, source)
+            VALUES (:domainId, :role, :omUserId, :username, :displayName, :source)
+            ON CONFLICT (domain_id, role, om_user_id) DO UPDATE
+               SET username     = EXCLUDED.username,
+                   display_name = EXCLUDED.display_name,
+                   source       = EXCLUDED.source,
+                   loaded_at    = now()
+            """)
+    int insertByDomainId(
+            @Bind("domainId") UUID domainId,
+            @Bind("role") String role,
+            @Bind("omUserId") UUID omUserId,
+            @Bind("username") String username,
+            @Bind("displayName") String displayName,
+            @Bind("source") String source);
+
+    @SqlUpdate(
+            "DELETE FROM ownership.domain_role_directory"
+                    + " WHERE domain_id = :domainId AND role = :role"
+                    + "   AND om_user_id = :omUserId")
+    int deleteEntry(
+            @Bind("domainId") UUID domainId,
+            @Bind("role") String role,
+            @Bind("omUserId") UUID omUserId);
+
     @SqlQuery(
             "SELECT om_user_id, username, display_name, role"
                     + " FROM ownership.domain_role_directory"

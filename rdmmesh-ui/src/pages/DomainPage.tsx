@@ -22,6 +22,7 @@ import { useApi } from "@/api/useApi";
 import { useAuth } from "@/auth/AuthContext";
 import { Loader } from "@/components/Loader";
 import { DomainOwnershipPanel } from "@/components/DomainOwnershipPanel";
+import { DomainApproversPanel } from "@/components/DomainApproversPanel";
 
 export function DomainPage() {
   const { t } = useTranslation();
@@ -87,6 +88,7 @@ export function DomainPage() {
       </Card>
 
       {isAdmin && <DomainOwnershipPanel domainId={id} />}
+      {isAdmin && <DomainApproversPanel domainId={id} />}
 
       <Card
         title={t("catalog.codesets")}
