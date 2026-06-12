@@ -1,5 +1,6 @@
 package bank.rdmmesh.authoring.internal;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -8,7 +9,13 @@ import bank.rdmmesh.authoring.internal.relational.RelationalStoreService;
 
 /**
  * Реализация {@link ReferenceIntegrityPort} поверх relational store (Stage 7).
- * Делегирует в {@link RelationalStoreService#versionReferenceViolations(UUID)}.
+ * На submit проверяет обе стороны ссылочной целостности:
+ * <ul>
+ *   <li>сторона ребёнка — {@link RelationalStoreService#versionReferenceViolations(UUID)}:
+ *       значение в ссылающейся колонке существует в опубликованном родителе;</li>
+ *   <li>сторона родителя — {@link RelationalStoreService#versionRemovedReferencedViolations(UUID)}:
+ *       черновик не убирает ключ, на который ещё ссылается ребёнок.</li>
+ * </ul>
  */
 public final class ReferenceIntegrityAdapter implements ReferenceIntegrityPort {
 
@@ -20,6 +27,8 @@ public final class ReferenceIntegrityAdapter implements ReferenceIntegrityPort {
 
     @Override
     public List<String> violations(UUID versionId) {
-        return relational.versionReferenceViolations(versionId);
+        List<String> out = new ArrayList<>(relational.versionReferenceViolations(versionId));
+        out.addAll(relational.versionRemovedReferencedViolations(versionId));
+        return out;
     }
 }

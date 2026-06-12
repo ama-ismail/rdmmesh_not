@@ -117,18 +117,14 @@ public final class RelationalStoreService {
      */
     public Optional<String> dryRunPublishReason(UUID versionId) {
         ResolvedTable t = requireProvisioned(codesetIdOf(versionId));
-        StringBuilder cols = new StringBuilder();
-        for (Column c : t.dataColumns) {
-            if (cols.length() > 0) cols.append(", ");
-            cols.append(RelationalDdlBuilder.q(c.name()));
-        }
-        String insertSelect = "INSERT INTO " + qTable(t.currentTable) + " (" + cols + ")"
-                + " SELECT " + cols + " FROM " + qTable(t.draftTable)
-                + " WHERE version_id = CAST(:v AS uuid)";
+        // Тот же upsert-путь, что и боевой publish (вариант 1) — иначе пред-проверка
+        // ложно ругалась бы на удаление всех строк __current.
+        List<String> merge = currentMergeStatements(t);
         try {
             jdbi.inTransaction(h -> {
-                h.createUpdate("DELETE FROM " + qTable(t.currentTable)).execute();
-                h.createUpdate(insertSelect).bind("v", versionId).execute();
+                for (String sql : merge) {
+                    h.createUpdate(sql).bind("v", versionId).execute();
+                }
                 throw new DryRunRollback();
             });
             return Optional.empty(); // недостижимо: DryRunRollback всегда бросается
@@ -273,6 +269,66 @@ public final class RelationalStoreService {
         return out;
     }
 
+    /**
+     * Обратная проверка (сторона РОДИТЕЛЯ) на submit: если черновик версии убирает ключ
+     * {@code __current}, на который ещё ссылается ребёнок (по материализованному FK
+     * ребёнок→родитель), — это нарушение, потому что публикация такого черновика упала бы
+     * на удалении строки родителя. Возвращает нарушения вида
+     * {@code <parent>.<key>=<val> ещё используется в <child>.<col>}. Пусто — всё ок.
+     *
+     * <p>Источник «детей» — реальные {@code FOREIGN KEY} в {@code rd_data} ({@code pg_constraint}),
+     * целью которых служит {@code __current} этого справочника; это в точности связи, которые
+     * физически блокируют publish.
+     */
+    public List<String> versionRemovedReferencedViolations(UUID versionId) {
+        UUID codesetId = codesetIdOf(versionId);
+        ResolvedTable t = requireProvisioned(codesetId);
+        // Входящие FK: child_table.child_col → this.__current.parent_col (по одной колонке).
+        String inboundSql = "SELECT child.relname AS child_table,"
+                + " ac.attname AS child_col, ap.attname AS parent_col"
+                + " FROM pg_constraint con"
+                + " JOIN pg_class child ON child.oid = con.conrelid"
+                + " JOIN pg_class parent ON parent.oid = con.confrelid"
+                + " JOIN unnest(con.conkey)  WITH ORDINALITY AS ck(attnum, ord) ON true"
+                + " JOIN unnest(con.confkey) WITH ORDINALITY AS cf(attnum, ord) ON cf.ord = ck.ord"
+                + " JOIN pg_attribute ac ON ac.attrelid = con.conrelid  AND ac.attnum = ck.attnum"
+                + " JOIN pg_attribute ap ON ap.attrelid = con.confrelid AND ap.attnum = cf.attnum"
+                + " WHERE con.contype = 'f'"
+                + " AND parent.relnamespace = '" + SCHEMA + "'::regnamespace"
+                + " AND parent.relname = :parent";
+        List<Map<String, Object>> inbound = jdbi.withHandle(h ->
+                h.createQuery(inboundSql).bind("parent", t.currentTable).mapToMap().list());
+        if (inbound.isEmpty()) {
+            return List.of();
+        }
+        String parentName = catalog.findCodeSet(codesetId)
+                .map(CatalogReadPort.CodeSetSnapshot::name).orElse(t.currentTable);
+        List<String> out = new ArrayList<>();
+        for (Map<String, Object> fk : inbound) {
+            String childTable = (String) fk.get("child_table");
+            String childCol = (String) fk.get("child_col");
+            String parentCol = (String) fk.get("parent_col");
+            String pcQ = RelationalDdlBuilder.q(parentCol);
+            String ccQ = RelationalDdlBuilder.q(childCol);
+            // Ключи родителя, которых нет в новом черновике (будут удалены), но на них ещё ссылается ребёнок.
+            String sql = "SELECT DISTINCT cur." + pcQ + "::text AS v"
+                    + " FROM " + qTable(t.currentTable) + " cur"
+                    + " WHERE NOT EXISTS (SELECT 1 FROM " + qTable(t.draftTable) + " d"
+                    + " WHERE d.version_id = CAST(:v AS uuid) AND d." + pcQ + " = cur." + pcQ + ")"
+                    + " AND EXISTS (SELECT 1 FROM " + qTable(childTable) + " ch"
+                    + " WHERE ch." + ccQ + " = cur." + pcQ + ")";
+            List<String> stillUsed = jdbi.withHandle(h ->
+                    h.createQuery(sql).bind("v", versionId).mapTo(String.class).list());
+            String childName = childTable.replaceFirst("__current$", "");
+            for (String val : stillUsed) {
+                out.add(parentName + "." + parentCol + "=" + val
+                        + " ещё используется в " + childName + "." + childCol
+                        + " — сначала уберите ссылку у ребёнка");
+            }
+        }
+        return out;
+    }
+
     private String refMsg(CatalogReadPort.CodeSetReferenceSnapshot ref, Object value) {
         String parent = catalog.findCodeSet(ref.toCodesetId())
                 .map(CatalogReadPort.CodeSetSnapshot::name)
@@ -368,18 +424,22 @@ public final class RelationalStoreService {
             if (cols.length() > 0) cols.append(", ");
             cols.append(RelationalDdlBuilder.q(c.name()));
         }
-        String insertSelect = "INSERT INTO " + qTable(t.currentTable) + " (" + cols + ")"
-                + " SELECT " + cols + " FROM " + qTable(t.draftTable)
-                + " WHERE version_id = CAST(:v AS uuid)";
         // История: снимок этой версии в __history (version_id + data), без перезатирания других версий.
         String vidCol = RelationalDdlBuilder.q("version_id");
         String historyInsert = "INSERT INTO " + qTable(t.historyTable) + " (" + vidCol + ", " + cols + ")"
                 + " SELECT " + vidCol + ", " + cols + " FROM " + qTable(t.draftTable)
                 + " WHERE version_id = CAST(:v AS uuid)";
+        // Вариант 1 (upsert): обновляем совпавшие ключи, добавляем новые, удаляем только реально
+        // исчезнувшие строки. Пережившие версию строки __current не трогаются — поэтому
+        // материализованный FK ребёнок→родитель больше не падает на пересборке родителя
+        // (раньше DELETE всех строк __current ломал publish, пока на них ссылались дети).
+        List<String> merge = currentMergeStatements(t);
 
-        int inserted = jdbi.inTransaction(h -> {
-            h.createUpdate("DELETE FROM " + qTable(t.currentTable)).execute();
-            int n = h.createUpdate(insertSelect).bind("v", versionId).execute();
+        int upserted = jdbi.inTransaction(h -> {
+            int n = h.createUpdate(merge.get(0)).bind("v", versionId).execute(); // upsert строк версии
+            for (int i = 1; i < merge.size(); i++) {
+                h.createUpdate(merge.get(i)).bind("v", versionId).execute();      // удалить исчезнувшие
+            }
             // Идемпотентно по версии: перезаписываем снимок именно этой версии в истории.
             h.createUpdate("DELETE FROM " + qTable(t.historyTable) + " WHERE version_id = CAST(:v AS uuid)")
                     .bind("v", versionId).execute();
@@ -387,8 +447,49 @@ public final class RelationalStoreService {
             h.attach(PhysicalTableRegistryDao.class).setPublishedVersion(codesetId, versionId);
             return n;
         });
-        log.info("relational store: publish version_id={} → {}: {} строк", versionId, t.currentTable, inserted);
-        return new PublishResult(codesetId, t.currentTable, inserted);
+        log.info("relational store: publish version_id={} → {}: {} строк", versionId, t.currentTable, upserted);
+        return new PublishResult(codesetId, t.currentTable, upserted);
+    }
+
+    /**
+     * SQL пересборки {@code __current} из draft версии способом upsert (вариант 1):
+     * (1) {@code INSERT … ON CONFLICT (ключи) DO UPDATE SET …=EXCLUDED} — обновляет совпавшие
+     * ключи и добавляет новые, не удаляя пережившие версию строки; (2) {@code DELETE} строк,
+     * ключей которых нет в новой версии. Оба statement'а биндят {@code :v = version_id}; порядок
+     * важен — сначала upsert, потом удаление исчезнувших. Если у справочника нет неключевых
+     * колонок — {@code DO NOTHING} (нечего обновлять).
+     */
+    private List<String> currentMergeStatements(ResolvedTable t) {
+        StringBuilder cols = new StringBuilder();
+        StringBuilder setClause = new StringBuilder();
+        for (Column c : t.dataColumns) {
+            if (cols.length() > 0) cols.append(", ");
+            cols.append(RelationalDdlBuilder.q(c.name()));
+            if (!t.keyNames.contains(c.name())) {
+                if (setClause.length() > 0) setClause.append(", ");
+                setClause.append(RelationalDdlBuilder.q(c.name()))
+                        .append(" = EXCLUDED.").append(RelationalDdlBuilder.q(c.name()));
+            }
+        }
+        StringBuilder keyCols = new StringBuilder();
+        StringBuilder keyMatch = new StringBuilder();
+        for (String k : t.keyNames) {
+            if (keyCols.length() > 0) keyCols.append(", ");
+            keyCols.append(RelationalDdlBuilder.q(k));
+            if (keyMatch.length() > 0) keyMatch.append(" AND ");
+            keyMatch.append("d.").append(RelationalDdlBuilder.q(k))
+                    .append(" = c.").append(RelationalDdlBuilder.q(k));
+        }
+        String onConflict = setClause.length() == 0
+                ? " ON CONFLICT (" + keyCols + ") DO NOTHING"
+                : " ON CONFLICT (" + keyCols + ") DO UPDATE SET " + setClause;
+        String upsert = "INSERT INTO " + qTable(t.currentTable) + " (" + cols + ")"
+                + " SELECT " + cols + " FROM " + qTable(t.draftTable)
+                + " WHERE version_id = CAST(:v AS uuid)" + onConflict;
+        String deleteMissing = "DELETE FROM " + qTable(t.currentTable) + " c"
+                + " WHERE NOT EXISTS (SELECT 1 FROM " + qTable(t.draftTable) + " d"
+                + " WHERE d.version_id = CAST(:v AS uuid) AND " + keyMatch + ")";
+        return List.of(upsert, deleteMissing);
     }
 
     // ── read ─────────────────────────────────────────────────────────────────────
