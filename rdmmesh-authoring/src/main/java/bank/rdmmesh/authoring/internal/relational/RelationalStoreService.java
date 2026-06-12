@@ -179,6 +179,107 @@ public final class RelationalStoreService {
         return one.length() > 500 ? one.substring(0, 500) + "…" : one;
     }
 
+    // ── ссылочная целостность (Stage 7): проверка column_refs против __current родителя ──
+
+    /**
+     * Жёсткая проверка одной строки: для каждой связи ({@code column_refs}) значение
+     * в {@code from_column} должно существовать в опубликованном родителе
+     * ({@code <parent>__current.<to_column>}). Возвращает список человекочитаемых
+     * нарушений (пусто — всё ок). Используется на add/update/bulk.
+     */
+    public List<String> referenceViolations(
+            UUID codesetId, List<String> keyParts, Map<String, Object> attributes) {
+        List<CatalogReadPort.CodeSetReferenceSnapshot> refs = catalog.referencesOf(codesetId);
+        if (refs.isEmpty()) {
+            return List.of();
+        }
+        ResolvedTable t = requireProvisioned(codesetId);
+        Map<String, Object> cells = new LinkedHashMap<>();
+        if (keyParts != null) {
+            for (int i = 0; i < t.keyNames.size() && i < keyParts.size(); i++) {
+                cells.put(t.keyNames.get(i), keyParts.get(i));
+            }
+        }
+        if (attributes != null) {
+            cells.putAll(attributes);
+        }
+        List<String> out = new ArrayList<>();
+        for (CatalogReadPort.CodeSetReferenceSnapshot ref : refs) {
+            if (!t.columnTypes.containsKey(ref.fromColumn())) {
+                continue; // from_column не материализована — нечего проверять
+            }
+            Object v = cells.get(ref.fromColumn());
+            if (v == null || (v instanceof String s && s.isBlank())) {
+                continue; // null/пусто — связь не задана, ок
+            }
+            ResolvedTable to;
+            try {
+                to = requireProvisioned(ref.toCodesetId());
+            } catch (RuntimeException e) {
+                out.add(refMsg(ref, v) + " (родитель не опубликован)");
+                continue;
+            }
+            String type = to.columnTypes.getOrDefault(ref.toColumn(), "text");
+            boolean exists = jdbi.withHandle(h -> h.createQuery(
+                    "SELECT 1 FROM " + qTable(to.currentTable)
+                            + " WHERE " + RelationalDdlBuilder.q(ref.toColumn())
+                            + " = CAST(:v AS " + type + ") LIMIT 1")
+                    .bind("v", coerce(v, type))
+                    .mapTo(Integer.class).findOne().isPresent());
+            if (!exists) {
+                out.add(refMsg(ref, v));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Жёсткая проверка всех строк черновика версии (set-based, по одной выборке на связь).
+     * Возвращает нарушения вида {@code from_column=<val> не найден в <parent>.<to_column>}.
+     * Используется на submit (DRAFT → IN_REVIEW).
+     */
+    public List<String> versionReferenceViolations(UUID versionId) {
+        UUID codesetId = codesetIdOf(versionId);
+        List<CatalogReadPort.CodeSetReferenceSnapshot> refs = catalog.referencesOf(codesetId);
+        if (refs.isEmpty()) {
+            return List.of();
+        }
+        ResolvedTable t = requireProvisioned(codesetId);
+        List<String> out = new ArrayList<>();
+        for (CatalogReadPort.CodeSetReferenceSnapshot ref : refs) {
+            if (!t.columnTypes.containsKey(ref.fromColumn())) {
+                continue;
+            }
+            ResolvedTable to;
+            try {
+                to = requireProvisioned(ref.toCodesetId());
+            } catch (RuntimeException e) {
+                out.add(refMsg(ref, "*") + " (родитель не опубликован)");
+                continue;
+            }
+            String fromQ = RelationalDdlBuilder.q(ref.fromColumn());
+            String toQ = RelationalDdlBuilder.q(ref.toColumn());
+            String sql = "SELECT DISTINCT d." + fromQ + "::text AS v"
+                    + " FROM " + qTable(t.draftTable) + " d"
+                    + " WHERE d.version_id = CAST(:v AS uuid) AND d." + fromQ + " IS NOT NULL"
+                    + " AND NOT EXISTS (SELECT 1 FROM " + qTable(to.currentTable) + " p"
+                    + " WHERE p." + toQ + " = d." + fromQ + ")";
+            List<String> missing = jdbi.withHandle(h ->
+                    h.createQuery(sql).bind("v", versionId).mapTo(String.class).list());
+            for (String mv : missing) {
+                out.add(refMsg(ref, mv));
+            }
+        }
+        return out;
+    }
+
+    private String refMsg(CatalogReadPort.CodeSetReferenceSnapshot ref, Object value) {
+        String parent = catalog.findCodeSet(ref.toCodesetId())
+                .map(CatalogReadPort.CodeSetSnapshot::name)
+                .orElse(ref.toCodesetId().toString());
+        return ref.fromColumn() + "=" + value + " не найден в " + parent + "." + ref.toColumn();
+    }
+
     // ── provision ───────────────────────────────────────────────────────────────
 
     /** Создаёт (IF NOT EXISTS) обе таблицы справочника (draft + current) и регистрирует базу. */

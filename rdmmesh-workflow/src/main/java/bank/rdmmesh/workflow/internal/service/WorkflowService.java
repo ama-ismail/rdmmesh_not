@@ -75,6 +75,8 @@ public final class WorkflowService {
     /** E17 / BR-21: справочник ролей домена. {@code null} → адресная
      *  маршрутизация submit'а отключена (legacy broadcast). */
     private final bank.rdmmesh.api.port.ApproverDirectoryPort approverDirectory;
+    /** Stage 7: проверка ссылочной целостности перед submit'ом; {@code null} → гейт выключен. */
+    private final bank.rdmmesh.api.port.ReferenceIntegrityPort referenceIntegrity;
 
     public WorkflowService(
             Jdbi jdbi,
@@ -92,12 +94,24 @@ public final class WorkflowService {
             CatalogReadPort catalog,
             EventBus eventBus,
             bank.rdmmesh.api.port.ApproverDirectoryPort approverDirectory) {
+        this(jdbi, lifecycle, ownership, catalog, eventBus, approverDirectory, null);
+    }
+
+    public WorkflowService(
+            Jdbi jdbi,
+            VersionLifecyclePort lifecycle,
+            OwnershipPort ownership,
+            CatalogReadPort catalog,
+            EventBus eventBus,
+            bank.rdmmesh.api.port.ApproverDirectoryPort approverDirectory,
+            bank.rdmmesh.api.port.ReferenceIntegrityPort referenceIntegrity) {
         this.jdbi = jdbi;
         this.lifecycle = lifecycle;
         this.ownership = ownership;
         this.catalog = catalog;
         this.eventBus = eventBus;
         this.approverDirectory = approverDirectory;
+        this.referenceIntegrity = referenceIntegrity;
     }
 
     public WorkflowTransitionEvent transition(
@@ -144,6 +158,18 @@ public final class WorkflowService {
                 (to == Status.IN_REVIEW) ? SubmitAssigneeHolder.get() : null;
         if (assignee != null && approverDirectory != null) {
             validateAssignee(assignee, codeSet.domainId(), version.createdBy());
+        }
+
+        // Stage 7: жёсткий гейт ссылочной целостности — нельзя отправить на ревью
+        // версию с «висячими» ссылками (значение FK-колонки отсутствует в
+        // опубликованном родителе).
+        if (to == Status.IN_REVIEW && referenceIntegrity != null) {
+            java.util.List<String> viol = referenceIntegrity.violations(versionId);
+            if (!viol.isEmpty()) {
+                throw new IllegalStateTransitionException(
+                        "нельзя отправить на ревью — нарушена ссылочная целостность: "
+                                + String.join("; ", viol));
+            }
         }
 
         StateMachine.Request req = new StateMachine.Request(

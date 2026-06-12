@@ -227,6 +227,9 @@ public final class AuthoringService {
     public CodeItemDto addItem(UUID versionId, NewItem req, UUID author) {
         VersionContext ctx = loadDraftContext(versionId);
         validateOrThrow(ctx, req.attributes(), keyDescription(req.keyParts()));
+        // Stage 7: жёсткая ссылочная целостность — значение FK-колонки должно
+        // существовать в опубликованном родителе (иначе понятная ошибка сразу).
+        assertReferencesOrThrow(ctx.codesetId(), req.keyParts(), req.attributes());
 
         // Stage 7c: пишем в rd_data (__draft). row_version/id/optimistic-lock — на колонках.
         CodeItemDto created = relationalStore.insertDraftItem(
@@ -258,6 +261,12 @@ public final class AuthoringService {
         CodeItemDto current = relationalStore.findDraftItemById(versionId, itemId)
                 .orElseThrow(() ->
                         new IllegalArgumentException("Item not found: " + itemId + " in version " + versionId));
+
+        // Stage 7: ссылочная целостность по итоговой (после merge) строке.
+        assertReferencesOrThrow(
+                ctx.codesetId(),
+                current.keyParts(),
+                patch.attributes() != null ? patch.attributes() : current.attributes());
 
         int n = relationalStore.updateDraftItemById(
                 versionId,
@@ -331,6 +340,11 @@ public final class AuthoringService {
             List<String> errs =
                     validator.validate(ctx.codesetId(), ctx.schemaVersion(), ctx.schemaText(), r.attributes());
             for (String e : errs) errors.add(new BulkError(i, r.keyParts(), "attributes", e));
+            // Stage 7: ссылочная целостность — весь импорт отклоняется, если хоть
+            // одна строка ссылается на отсутствующее в родителе значение.
+            for (String e : relationalStore.referenceViolations(ctx.codesetId(), r.keyParts(), r.attributes())) {
+                errors.add(new BulkError(i, r.keyParts(), "reference", e));
+            }
         }
         if (!errors.isEmpty()) {
             return BulkResult.rejected(rows.size(), errors);
@@ -534,6 +548,20 @@ public final class AuthoringService {
 
     private static String keyDescription(List<String> key) {
         return key == null ? "<no-key>" : String.join("|", key);
+    }
+
+    /**
+     * Stage 7 — жёсткая ссылочная целостность: значение FK-колонки должно
+     * существовать в опубликованном родителе. Бросает {@link ValidationException}
+     * (REST → 400) с понятным перечнем нарушений.
+     */
+    private void assertReferencesOrThrow(
+            UUID codesetId, List<String> keyParts, Map<String, Object> attributes) {
+        List<String> violations = relationalStore.referenceViolations(codesetId, keyParts, attributes);
+        if (!violations.isEmpty()) {
+            throw new ValidationException(
+                    "нарушена ссылочная целостность: " + String.join("; ", violations));
+        }
     }
 
     // ── DTO ─────────────────────────────────────────────────────────────────────

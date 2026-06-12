@@ -175,9 +175,13 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
                         config.getDatabase().getPassword())
                 : null;
         log.info("Workflow engine: {}", engineKind);
+        // Stage 7: жёсткий гейт ссылочной целостности на submit (rd_data column_refs).
+        bank.rdmmesh.api.port.ReferenceIntegrityPort referenceIntegrity =
+                AuthoringModule.buildReferenceIntegrityPort(
+                        jdbi, catalogReadPort, environment.getObjectMapper());
         WorkflowModule.Resources workflow = WorkflowModule.build(
                 jdbi, lifecycle, ownershipPort, catalogReadPort, eventBus,
-                approverDirectory, engineKind, flowableDb);
+                approverDirectory, referenceIntegrity, engineKind, flowableDb);
         environment.jersey().register(workflow.transitions());
         environment.jersey().register(workflow.myTasks());
         // Flowable-движок закрывается на остановке сервиса (Managed).

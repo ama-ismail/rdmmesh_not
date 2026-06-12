@@ -6,9 +6,11 @@ import org.jdbi.v3.core.Jdbi;
 import bank.rdmmesh.api.eventbus.EventBus;
 import bank.rdmmesh.api.port.CatalogReadPort;
 import bank.rdmmesh.api.port.PublishedSnapshotPort;
+import bank.rdmmesh.api.port.ReferenceIntegrityPort;
 import bank.rdmmesh.api.port.RelationalReadPort;
 import bank.rdmmesh.api.port.VersionLifecyclePort;
 import bank.rdmmesh.authoring.internal.PublishedSnapshotAdapter;
+import bank.rdmmesh.authoring.internal.ReferenceIntegrityAdapter;
 import bank.rdmmesh.authoring.internal.RelationalReadAdapter;
 import bank.rdmmesh.authoring.internal.VersionLifecycleAdapter;
 import bank.rdmmesh.authoring.internal.relational.RelationalStoreService;
@@ -62,6 +64,12 @@ public final class AuthoringModule {
     public static RelationalReadPort buildRelationalReadPort(
             Jdbi jdbi, CatalogReadPort catalog, ObjectMapper json) {
         return new RelationalReadAdapter(new RelationalStoreService(jdbi, catalog, json));
+    }
+
+    /** Порт проверки ссылочной целостности для workflow submit-гейта (Stage 7). */
+    public static ReferenceIntegrityPort buildReferenceIntegrityPort(
+            Jdbi jdbi, CatalogReadPort catalog, ObjectMapper json) {
+        return new ReferenceIntegrityAdapter(new RelationalStoreService(jdbi, catalog, json));
     }
 
     public record Resources(

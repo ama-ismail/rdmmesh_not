@@ -74,10 +74,28 @@ public final class WorkflowModule {
             bank.rdmmesh.api.port.ApproverDirectoryPort approverDirectory,
             EngineKind kind,
             FlowableDbConfig flowableDb) {
+        return build(jdbi, lifecycle, ownership, catalog, eventBus,
+                approverDirectory, null, kind, flowableDb);
+    }
+
+    /**
+     * Stage 7: тот же build + {@code referenceIntegrity} — жёсткий гейт ссылочной
+     * целостности на submit. {@code null} — гейт выключен.
+     */
+    public static Resources build(
+            Jdbi jdbi,
+            VersionLifecyclePort lifecycle,
+            OwnershipPort ownership,
+            CatalogReadPort catalog,
+            EventBus eventBus,
+            bank.rdmmesh.api.port.ApproverDirectoryPort approverDirectory,
+            bank.rdmmesh.api.port.ReferenceIntegrityPort referenceIntegrity,
+            EngineKind kind,
+            FlowableDbConfig flowableDb) {
 
         WorkflowService service =
                 new WorkflowService(jdbi, lifecycle, ownership, catalog, eventBus,
-                        approverDirectory);
+                        approverDirectory, referenceIntegrity);
 
         WorkflowEngine engine;
         FlowableEngineManager manager = null;
