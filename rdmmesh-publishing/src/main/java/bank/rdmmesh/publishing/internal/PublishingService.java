@@ -127,6 +127,17 @@ public final class PublishingService {
             return PublishOutcome.SKIPPED;
         }
 
+        // Stage 7 (B): пред-проверка реляционной пересборки ПЕРЕД публикацией. Если
+        // пересборка __current невозможна (напр. нарушение материализованного FK между
+        // __current-таблицами), публикацию НЕ проводим — версия остаётся OWNER_APPROVED,
+        // а провал виден явно (статус BLOCKED, Stage 7 A), а не молча.
+        Optional<String> blocked = snapshots.publishBlockReason(versionId);
+        if (blocked.isPresent()) {
+            log.error("publishing: publish BLOCKED для version_id={} — реляционная пересборка "
+                    + "невозможна: {}", versionId, blocked.get());
+            return PublishOutcome.BLOCKED;
+        }
+
         CodeSetSnapshot cs = catalog.findCodeSet(version.codesetId())
                 .orElseThrow(() -> new IllegalStateException(
                         "CodeSet missing for version " + versionId));
@@ -292,7 +303,7 @@ public final class PublishingService {
         return new VerifyResult(true, verified, computed, stored, null);
     }
 
-    public enum PublishOutcome { PUBLISHED, SKIPPED }
+    public enum PublishOutcome { PUBLISHED, SKIPPED, BLOCKED }
 
     public record VerifyResult(
             boolean applicable,

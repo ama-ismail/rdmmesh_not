@@ -121,6 +121,8 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
                 OwnershipModule.buildApproversResource(approverDirectory));
         environment.jersey().register(
                 OwnershipModule.buildDirectoryAdminResource(approverDirectory));
+        environment.jersey().register(
+                OwnershipModule.buildApproversAdminResource(approverDirectory));
 
         CatalogModule.Resources catalog = CatalogModule.build(jdbi, ownershipPort);
         environment.jersey().register(catalog.domains());
@@ -155,7 +157,7 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         environment.jersey().register(authoring.versions());
         environment.jersey().register(authoring.items());
         environment.jersey().register(authoring.diff());
-        environment.jersey().register(authoring.closureAdmin());
+        environment.jersey().register(authoring.relational());
 
         // E5 — Workflow. Lifecycle-write идёт через authoring (SPEC §3.3),
         // catalog read нужен workflow для resolve domainId по codesetId.
@@ -173,9 +175,13 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
                         config.getDatabase().getPassword())
                 : null;
         log.info("Workflow engine: {}", engineKind);
+        // Stage 7: жёсткий гейт ссылочной целостности на submit (rd_data column_refs).
+        bank.rdmmesh.api.port.ReferenceIntegrityPort referenceIntegrity =
+                AuthoringModule.buildReferenceIntegrityPort(
+                        jdbi, catalogReadPort, environment.getObjectMapper());
         WorkflowModule.Resources workflow = WorkflowModule.build(
                 jdbi, lifecycle, ownershipPort, catalogReadPort, eventBus,
-                approverDirectory, engineKind, flowableDb);
+                approverDirectory, referenceIntegrity, engineKind, flowableDb);
         environment.jersey().register(workflow.transitions());
         environment.jersey().register(workflow.myTasks());
         // Flowable-движок закрывается на остановке сервиса (Managed).
@@ -197,7 +203,8 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         // OutboundPort (OutboxOutboundAdapter) кладёт VersionPublishedEvent в
         // publishing.webhook_outbox для consumer-систем. WebhookDeliveryWorker —
         // Dropwizard Managed — дренирует outbox с retry/backoff.
-        PublishedSnapshotPort snapshots = AuthoringModule.buildSnapshotPort(jdbi);
+        PublishedSnapshotPort snapshots = AuthoringModule.buildSnapshotPort(
+                jdbi, catalogReadPort, environment.getObjectMapper());
         WorkflowJournalPort workflowJournal = WorkflowModule.buildJournalPort(jdbi);
         SigningKeyPort signingKey = EnvSigningKeyAdapter.fromEnv(
                 "RDM_HMAC_KEY",
@@ -211,6 +218,7 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
                 eventBus, environment.getObjectMapper());
         environment.jersey().register(publishing.verify());
         environment.jersey().register(publishing.subscriptions());
+        environment.jersey().register(publishing.publishRetry());
         environment.lifecycle().manage(publishing.deliveryWorker());
 
         // E7 — Ownership webhook receiver. POST /webhooks/om/ownership принимает
@@ -228,8 +236,13 @@ public final class RdmmeshApplication extends Application<RdmmeshConfiguration> 
         // E8 — Distribution. Read-only consumer-API:
         //   GET /rdm/{domain}/{codeset}/{items|lookup|export}
         // ArchUnit-gates запрещают этому модулю любые DB writes.
+        // Stage 7b: items читаются из rd_data через RelationalReadPort (не jsonb code_item).
         environment.jersey().register(
-                DistributionModule.buildResource(jdbi, environment.getObjectMapper()));
+                DistributionModule.buildResource(
+                        jdbi,
+                        environment.getObjectMapper(),
+                        AuthoringModule.buildRelationalReadPort(
+                                jdbi, catalogReadPort, environment.getObjectMapper())));
 
         environment.jersey().register(new AuthResource());
 

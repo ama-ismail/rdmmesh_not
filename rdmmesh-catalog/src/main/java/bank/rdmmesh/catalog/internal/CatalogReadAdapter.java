@@ -1,7 +1,12 @@
 package bank.rdmmesh.catalog.internal;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.jdbi.v3.core.Jdbi;
 
@@ -16,6 +21,8 @@ import bank.rdmmesh.catalog.internal.dao.DomainDao;
  * только чтение из {@code catalog.code_set} / {@code catalog.code_set_schema}.
  */
 public final class CatalogReadAdapter implements CatalogReadPort {
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final Jdbi jdbi;
 
@@ -33,6 +40,7 @@ public final class CatalogReadAdapter implements CatalogReadPort {
                         row.hierarchyMode(),
                         row.schemaVersion() == null ? 1 : row.schemaVersion(),
                         row.currentPublishedVersion(),
+                        row.keySpecJson(),
                         row.deletedAt() != null));
     }
 
@@ -59,5 +67,34 @@ public final class CatalogReadAdapter implements CatalogReadPort {
     public Optional<DomainSnapshot> findDomain(UUID domainId) {
         return jdbi.withExtension(DomainDao.class, dao -> dao.findById(domainId))
                 .map(row -> new DomainSnapshot(row.id(), row.name(), row.displayName()));
+    }
+
+    @Override
+    public List<CodeSetReferenceSnapshot> referencesOf(UUID codesetId) {
+        String json = jdbi.withExtension(CodeSetDao.class, dao -> dao.findById(codesetId))
+                .map(CodeSetDao.CodeSetRow::columnRefsJson)
+                .orElse(null);
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            JsonNode arr = JSON.readTree(json);
+            List<CodeSetReferenceSnapshot> out = new ArrayList<>();
+            if (arr.isArray()) {
+                for (JsonNode ref : arr) {
+                    String from = ref.path("from_column").asText(null);
+                    String toCodeset = ref.path("to_codeset_id").asText(null);
+                    String to = ref.path("to_column").asText(null);
+                    if (from == null || toCodeset == null || to == null) {
+                        continue;
+                    }
+                    out.add(new CodeSetReferenceSnapshot(from, UUID.fromString(toCodeset), to));
+                }
+            }
+            return out;
+        } catch (RuntimeException | com.fasterxml.jackson.core.JsonProcessingException e) {
+            // column_refs descriptive (E25) — битый JSON не должен ронять читателя.
+            return List.of();
+        }
     }
 }

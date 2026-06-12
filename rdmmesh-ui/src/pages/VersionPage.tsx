@@ -37,6 +37,7 @@ import { ConsumerViewButton } from "@/components/ConsumerViewDrawer";
 import { HierarchyTree } from "@/components/HierarchyTree";
 import { RebuildClosureButton } from "@/components/RebuildClosureButton";
 import { RatingTransitionPivotView } from "@/components/RatingTransitionPivotView";
+import { RelationalSyncStatusBanner } from "@/components/RelationalSyncStatusBanner";
 import type { CodeSet, CodeSetVersion, Domain, VerifyResponse } from "@/api/types";
 
 type ViewMode = "grid" | "tree" | "pivot";
@@ -186,6 +187,8 @@ export function VersionPage() {
                   {verify.data && <VerifyResult data={verify.data} />}
                 </div>
               )}
+
+              <RelationalSyncStatusBanner codesetId={v.codeset_id} versionId={vid} />
             </>
           )}
         </Loader>

@@ -17,6 +17,7 @@ import bank.rdmmesh.publishing.internal.egress.EgressPolicy;
 import bank.rdmmesh.publishing.internal.outbound.OutboxOutboundAdapter;
 import bank.rdmmesh.publishing.internal.outbound.SubscriptionService;
 import bank.rdmmesh.publishing.internal.outbound.WebhookDeliveryWorker;
+import bank.rdmmesh.publishing.resource.PublishRetryResource;
 import bank.rdmmesh.publishing.resource.SubscriptionResource;
 import bank.rdmmesh.publishing.resource.VersionVerifyResource;
 
@@ -74,7 +75,8 @@ public final class PublishingModule {
                 outbound,
                 worker,
                 new VersionVerifyResource(service),
-                new SubscriptionResource(subscriptions, json));
+                new SubscriptionResource(subscriptions, json),
+                new PublishRetryResource(service));
     }
 
     public record Resources(
@@ -82,5 +84,6 @@ public final class PublishingModule {
             OutboundPort outbound,
             WebhookDeliveryWorker deliveryWorker,
             VersionVerifyResource verify,
-            SubscriptionResource subscriptions) {}
+            SubscriptionResource subscriptions,
+            PublishRetryResource publishRetry) {}
 }

@@ -11,7 +11,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import bank.rdmmesh.authoring.internal.dao.CodeItemDao.ItemRow;
 import bank.rdmmesh.authoring.internal.dao.CodeSetVersionDao.VersionRow;
 import bank.rdmmesh.authoring.resource.CodeItemDto;
 import bank.rdmmesh.spec.entity.CodeSetVersion;
@@ -55,27 +54,6 @@ public final class AuthoringMappers {
         v.setOwnerWasProvisional(Boolean.TRUE.equals(row.ownerWasProvisional()));
         v.setItemCount(row.itemCount());
         return v;
-    }
-
-    public static CodeItemDto toItem(ItemRow row) {
-        return new CodeItemDto(
-                row.id().toString(),
-                row.versionId().toString(),
-                parseList(row.keyPartsJson()),
-                row.labelRu(),
-                row.labelEn(),
-                row.descriptionRu(),
-                row.descriptionEn(),
-                parseList(row.parentKeyJson()),
-                parseMap(row.parentRefJson()),
-                parseMap(row.attributesJson()),
-                row.orderIndex(),
-                row.status(),
-                row.effectiveFrom() == null ? null : row.effectiveFrom().toString(),
-                row.effectiveTo() == null ? null : row.effectiveTo().toString(),
-                toIso(row.systemFrom()),
-                toIso(row.systemTo()),
-                row.rowVersion());
     }
 
     private static String toIso(java.time.Instant i) {

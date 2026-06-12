@@ -16,6 +16,7 @@ import type {
   Domain,
   ItemsPage,
   Lang,
+  RelationalSyncStatus,
   Subscription,
   SubscriptionFilter,
   VerifyResponse,
@@ -49,6 +50,12 @@ export const api = {
   diffVersions: (toVersionId: string, fromVersionId: string) =>
     apiFetch<VersionDiffResponse>(
       `/versions/${toVersionId}/diff?from=${encodeURIComponent(fromVersionId)}`,
+    ),
+
+  // Stage 7 (A) — статус синхронизации rd_data после публикации версии.
+  relationalSyncStatus: (codesetId: string, versionId: string) =>
+    apiFetch<RelationalSyncStatus>(
+      `/relational/codesets/${codesetId}/sync-status?version_id=${encodeURIComponent(versionId)}`,
     ),
 
   // Workflow
@@ -272,6 +279,15 @@ export const apiMutations = {
       body: JSON.stringify({ references }),
     }),
 
+  // Материализация column_refs в настоящие Postgres FK между __current-таблицами
+  // (Stage 6 / applyForeignKeys). Тела нет — связи читаются из column_refs. Отчёт:
+  // applied (создано) + skipped (пропущено, с причиной). Defensive: FK только если
+  // целевая колонка — единственная PK-колонка целевого __current.
+  applyForeignKeys: (codesetId: string) =>
+    apiFetch<ForeignKeyReport>(`/relational/codesets/${codesetId}/foreign-keys`, {
+      method: "POST",
+    }),
+
   // E11.2a — DRAFT lifecycle + workflow transitions
   createDraft: (codesetId: string, body: CreateDraftRequest = {}) =>
     apiFetch<CodeSetVersion>(`/versions/by-codeset/${codesetId}`, {
@@ -281,6 +297,13 @@ export const apiMutations = {
 
   deleteDraft: (versionId: string) =>
     apiFetch<void>(`/versions/${versionId}`, { method: "DELETE" }),
+
+  // Stage 7 (B) — повтор авто-публикации после фикса данных (RDM_ADMIN).
+  // Нужен, когда публикация была отклонена пред-проверкой (BLOCKED).
+  retryPublish: (versionId: string) =>
+    apiFetch<{ outcome: string }>(`/versions/${versionId}/publish-retry`, {
+      method: "POST",
+    }),
 
   createItem: (versionId: string, item: NewItemBody) =>
     apiFetch<CodeItem>(`/versions/${versionId}/items`, {
@@ -482,6 +505,10 @@ export const adminApi = {
       `/admin/users/search?q=${encodeURIComponent(q)}&limit=${limit}`,
     ),
 
+  // Согласующие домена (directory) — адресно по domain_id (RDM_ADMIN).
+  listDomainApprovers: (domainId: string) =>
+    apiFetch<Approver[]>(`/admin/domains/${domainId}/approvers`),
+
   // Tasks
   myAdminTasks: () => apiFetch<AdminTaskView[]>("/admin/tasks/my"),
 
@@ -559,6 +586,29 @@ export const adminMutations = {
       body: JSON.stringify({ action, notes: notes ?? null }),
     }),
 
+  // Согласующие домена (directory) по domain_id. Добавляет/удаляет одного
+  // кандидата (STEWARD | BUSINESS_OWNER), source RDM_ADMIN_LOCAL. Работает для
+  // локальных доменов без om_domain_id (в отличие от reload).
+  addDomainApprover: (
+    domainId: string,
+    body: {
+      role: DirectoryRole;
+      om_user_id: string;
+      username?: string | null;
+      display_name?: string | null;
+    },
+  ) =>
+    apiFetch<Approver[]>(`/admin/domains/${domainId}/approvers`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  removeDomainApprover: (domainId: string, role: DirectoryRole, omUserId: string) =>
+    apiFetch<void>(
+      `/admin/domains/${domainId}/approvers?role=${role}&om_user_id=${encodeURIComponent(omUserId)}`,
+      { method: "DELETE" },
+    ),
+
   // E22 — заявки на удаление CodeSet'а.
   submitDeletionRequest: (codesetId: string, reason: string) =>
     apiFetch<DeletionRequestView>(
@@ -609,6 +659,24 @@ export interface DeletionRequestView {
   decided_at: string | null;
   codeset_deleted: boolean;
   has_published_versions: boolean;
+}
+
+// Отчёт POST /relational/codesets/{id}/foreign-keys (Java records, camelCase).
+export interface AppliedFk {
+  fromColumn: string;
+  toCodesetId: string;
+  toTable: string;
+  toColumn: string;
+  constraint: string;
+}
+export interface SkippedFk {
+  fromColumn: string;
+  toCodesetId: string;
+  reason: string;
+}
+export interface ForeignKeyReport {
+  applied: AppliedFk[];
+  skipped: SkippedFk[];
 }
 
 // Возвращается из POST /versions/{id}/closure/rebuild (Java record, camelCase).

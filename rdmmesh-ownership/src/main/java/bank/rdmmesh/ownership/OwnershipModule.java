@@ -12,6 +12,7 @@ import bank.rdmmesh.ownership.internal.PostgresApproverDirectoryPort;
 import bank.rdmmesh.ownership.internal.PostgresOwnershipPort;
 import bank.rdmmesh.ownership.internal.webhook.HmacVerifier;
 import bank.rdmmesh.ownership.internal.webhook.OwnershipWebhookService;
+import bank.rdmmesh.ownership.resource.DomainApproversAdminResource;
 import bank.rdmmesh.ownership.resource.DomainApproversResource;
 import bank.rdmmesh.ownership.resource.DomainRoleDirectoryAdminResource;
 import bank.rdmmesh.ownership.resource.OwnershipWebhookResource;
@@ -50,6 +51,12 @@ public final class OwnershipModule {
     public static DomainRoleDirectoryAdminResource buildDirectoryAdminResource(
             ApproverDirectoryPort directory) {
         return new DomainRoleDirectoryAdminResource(directory);
+    }
+
+    /** REST: /admin/domains/{id}/approvers (RDM_ADMIN, адресно по domain_id). */
+    public static DomainApproversAdminResource buildApproversAdminResource(
+            ApproverDirectoryPort directory) {
+        return new DomainApproversAdminResource(directory);
     }
 
     /**

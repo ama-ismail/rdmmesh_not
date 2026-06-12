@@ -29,16 +29,6 @@ public interface DistributionDao {
                     + " v.system_from, v.system_to,"
                     + " v.item_count";
 
-    String ITEM_COLS =
-            "i.id,"
-                    + " i.key_parts::text   AS key_parts_json,"
-                    + " i.parent_key::text  AS parent_key_json,"
-                    + " i.label_ru, i.label_en,"
-                    + " i.description_ru, i.description_en,"
-                    + " i.attributes::text  AS attributes_json,"
-                    + " i.order_index, i.status,"
-                    + " i.effective_from, i.effective_to";
-
     @SqlQuery(
             "SELECT cs.id AS codeset_id, cs.name AS codeset_name,"
                     + " d.id  AS domain_id,  d.name  AS domain_name,"
@@ -88,64 +78,6 @@ public interface DistributionDao {
             @Bind("codesetId") UUID codesetId,
             @Bind("knowledgeAt") Instant knowledgeAt);
 
-    @SqlQuery(
-            "SELECT " + ITEM_COLS
-                    + "  FROM authoring.code_item i"
-                    + " WHERE i.version_id = :versionId"
-                    + " ORDER BY i.key_parts::text, i.order_index"
-                    + " OFFSET :offset LIMIT :limit")
-    @RegisterConstructorMapper(ItemRow.class)
-    List<ItemRow> findItemsPage(
-            @Bind("versionId") UUID versionId,
-            @Bind("offset") int offset,
-            @Bind("limit") int limit);
-
-    /**
-     * Bitemporal effective-фильтр по дате {@code asOf}. NULL {@code effective_from} —
-     * «открытое слева», NULL {@code effective_to} — «открытое справа».
-     */
-    @SqlQuery(
-            "SELECT " + ITEM_COLS
-                    + "  FROM authoring.code_item i"
-                    + " WHERE i.version_id = :versionId"
-                    + "   AND daterange("
-                    + "         coalesce(i.effective_from, '-infinity'::date),"
-                    + "         coalesce(i.effective_to,   'infinity'::date),"
-                    + "         '[)'"
-                    + "       ) @> :asOf::date"
-                    + " ORDER BY i.key_parts::text, i.order_index"
-                    + " OFFSET :offset LIMIT :limit")
-    @RegisterConstructorMapper(ItemRow.class)
-    List<ItemRow> findItemsPageEffectiveAt(
-            @Bind("versionId") UUID versionId,
-            @Bind("asOf") LocalDate asOf,
-            @Bind("offset") int offset,
-            @Bind("limit") int limit);
-
-    @SqlQuery("SELECT count(*) FROM authoring.code_item WHERE version_id = :versionId")
-    int countItems(@Bind("versionId") UUID versionId);
-
-    @SqlQuery(
-            "SELECT count(*) FROM authoring.code_item i"
-                    + " WHERE i.version_id = :versionId"
-                    + "   AND daterange("
-                    + "         coalesce(i.effective_from, '-infinity'::date),"
-                    + "         coalesce(i.effective_to,   'infinity'::date),"
-                    + "         '[)'"
-                    + "       ) @> :asOf::date")
-    int countItemsEffectiveAt(
-            @Bind("versionId") UUID versionId, @Bind("asOf") LocalDate asOf);
-
-    @SqlQuery(
-            "SELECT " + ITEM_COLS
-                    + "  FROM authoring.code_item i"
-                    + " WHERE i.version_id = :versionId"
-                    + "   AND i.key_parts  = :keyPartsJson::jsonb")
-    @RegisterConstructorMapper(ItemRow.class)
-    Optional<ItemRow> lookup(
-            @Bind("versionId") UUID versionId,
-            @Bind("keyPartsJson") String keyPartsJson);
-
     /**
      * Текст активной (последней по {@code version}) CodeSetSchema справочника. Нужен
      * экспорту, чтобы выгружать колонки атрибутов в заданном порядке ({@code propertyOrder}).
@@ -176,18 +108,4 @@ public interface DistributionDao {
             Instant systemFrom,
             Instant systemTo,
             int itemCount) {}
-
-    record ItemRow(
-            UUID id,
-            String keyPartsJson,
-            String parentKeyJson,
-            String labelRu,
-            String labelEn,
-            String descriptionRu,
-            String descriptionEn,
-            String attributesJson,
-            int orderIndex,
-            String status,
-            LocalDate effectiveFrom,
-            LocalDate effectiveTo) {}
 }
